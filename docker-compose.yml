@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: remixdb
+    ports:
+      - "55442:5432"
+    volumes:
+      - remix_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d remixdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      APP_NAME: AI YouTube Remix Generator API
+      ENVIRONMENT: development
+      DEBUG: "true"
+      API_PREFIX: /api
+      DATABASE_URL: postgresql://user:password@db:5432/remixdb
+      CORS_ORIGINS: '["http://localhost:5179","http://127.0.0.1:5179"]'
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "18082:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      - backend
+    ports:
+      - "5179:80"
+    restart: unless-stopped
+
+volumes:
+  remix_postgres_data:
