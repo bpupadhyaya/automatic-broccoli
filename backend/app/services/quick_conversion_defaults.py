@@ -14,16 +14,26 @@ def _heritage_direction(remix_profile: QuickRemixProfile, heritage_mode: QuickHe
             "Original culture replaced with fictional Nepali-heritage actors",
             "Nepali-heritage cast replacement for all principal performers",
         )
+    if heritage_mode == "swap_to_hindi":
+        return (
+            "Original culture replaced with fictional Hindi-heritage actors",
+            "Hindi-heritage cast replacement for all principal performers",
+        )
     if heritage_mode == "mix":
         return (
-            "Mixed heritage cast blending English and Nepali fictional performers",
-            "Blend English and Nepali heritage styling across leads and dancers",
+            "Mixed heritage cast blending English, Nepali, and Hindi fictional performers",
+            "Blend English, Nepali, and Hindi heritage styling across leads and dancers",
         )
 
     if remix_profile == "english":
         return (
             "Primarily fictional English-heritage performers with optional global styling",
             "English-focused cast with global crossover styling",
+        )
+    if remix_profile == "hindi":
+        return (
+            "Primarily fictional Hindi-heritage performers with optional global styling",
+            "Hindi-focused cast with global crossover styling",
         )
     return (
         "Primarily fictional Nepali-heritage performers with optional global styling",
@@ -50,6 +60,25 @@ def _character_defaults(remix_profile: QuickRemixProfile, cast_preset: QuickCast
                 "Fictional mixed cast: extremely beautiful long-hair blonde blue-eyed women age 18-25, "
                 "plus male actors age 18-30 in blonde and brunette variants with blue eyes"
             ),
+            "Mixed cast with female and male leads plus dancers",
+            "18-30",
+        )
+
+    if remix_profile == "hindi":
+        if cast_preset == "female":
+            return (
+                "Fictional Hindi cinema-inspired female lead singer age 18-25 with glamorous long-hair styling",
+                "Female lead singer with supporting mixed dancers",
+                "18-25",
+            )
+        if cast_preset == "male":
+            return (
+                "Fictional Hindi cinema-inspired male actors age 18-30 with charismatic performance styling",
+                "Male lead singer with supporting mixed dancers",
+                "18-30",
+            )
+        return (
+            "Fictional Hindi cinema-inspired mixed cast with women age 18-25 and men age 18-30",
             "Mixed cast with female and male leads plus dancers",
             "18-30",
         )
@@ -96,6 +125,19 @@ def build_quick_project_payload(
             "remix_genre": "Electronic dance pop",
             "beat_intensity": "Punchy",
             "vocal_handling": "Polished layered vocals",
+        }
+    elif remix_profile == "hindi":
+        defaults = {
+            "visual_theme": "Bollywood-style grand stage romance with vibrant city lights",
+            "costume_style": "Hindi cinema-inspired contemporary glam wardrobe",
+            "lighting_style": "Warm golden key lights with colorful concert washes",
+            "cinematic_mood": "Dramatic romantic performance arc with high spectacle",
+            "dance_style": "Bollywood fusion choreography",
+            "energy_level": "High",
+            "camera_style": "Cinematic dolly spins with sweeping crane reveals",
+            "remix_genre": "Hindi pop dance fusion",
+            "beat_intensity": "Driving",
+            "vocal_handling": "Expressive melodic vocals with layered hooks",
         }
     else:
         defaults = {

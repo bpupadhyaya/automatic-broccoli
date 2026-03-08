@@ -92,6 +92,7 @@ export default function QuickConvertPage() {
               >
                 <option value="english">English Remix</option>
                 <option value="nepali">Nepali Remix</option>
+                <option value="hindi">Hindi Remix</option>
               </select>
             </label>
 
@@ -118,7 +119,8 @@ export default function QuickConvertPage() {
                 <option value="preserve">Preserve Profile Heritage</option>
                 <option value="swap_to_english">Replace With English Actors</option>
                 <option value="swap_to_nepali">Replace With Nepali Actors</option>
-                <option value="mix">Mix English + Nepali Actors</option>
+                <option value="swap_to_hindi">Replace With Hindi Actors</option>
+                <option value="mix">Mix English + Nepali + Hindi Actors</option>
               </select>
             </label>
           </div>
@@ -134,8 +136,9 @@ export default function QuickConvertPage() {
 
           <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-700">
             <p className="font-semibold">Default behavior</p>
-            <p>English profile uses fictional cast defaults including requested age/appearance presets.</p>
-            <p>Heritage mode lets you preserve, swap, or mix English/Nepali performer heritage.</p>
+            <p>English, Nepali, and Hindi profiles use fictional cast defaults with profile-specific styling.</p>
+            <p>Hindi defaults use girls age 18-25 and boys age 18-30.</p>
+            <p>Heritage mode lets you preserve, swap, or mix English/Nepali/Hindi performer heritage.</p>
           </div>
 
           {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-700">{error}</p>}

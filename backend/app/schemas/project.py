@@ -11,9 +11,9 @@ CelebrityMode = Literal[
     "licensed_real_celebrity_only",
 ]
 
-QuickRemixProfile = Literal["english", "nepali"]
+QuickRemixProfile = Literal["english", "nepali", "hindi"]
 QuickCastPreset = Literal["female", "male", "mixed"]
-QuickHeritageMode = Literal["preserve", "swap_to_english", "swap_to_nepali", "mix"]
+QuickHeritageMode = Literal["preserve", "swap_to_english", "swap_to_nepali", "swap_to_hindi", "mix"]
 
 
 class ORMBaseModel(BaseModel):

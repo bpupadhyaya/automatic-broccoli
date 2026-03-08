@@ -115,9 +115,9 @@ export interface ApplyCharacterToShotsResponse {
   updated_shot_count: number;
 }
 
-export type QuickRemixProfile = "english" | "nepali";
+export type QuickRemixProfile = "english" | "nepali" | "hindi";
 export type QuickCastPreset = "female" | "male" | "mixed";
-export type QuickHeritageMode = "preserve" | "swap_to_english" | "swap_to_nepali" | "mix";
+export type QuickHeritageMode = "preserve" | "swap_to_english" | "swap_to_nepali" | "swap_to_hindi" | "mix";
 
 export interface QuickProjectCreateInput {
   target_original_video_url: string;
