@@ -56,7 +56,16 @@ export default function DashboardPage() {
                         #{project.id}
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-slate-700">{project.target_original_video_url}</td>
+                    <td className="px-3 py-2 text-slate-700">
+                      <a
+                        href={project.target_original_video_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="break-all text-brand-700 hover:underline"
+                      >
+                        {project.target_original_video_url}
+                      </a>
+                    </td>
                     <td className="px-3 py-2 text-slate-700">{project.remix_genre}</td>
                     <td className="px-3 py-2 text-slate-700">{project.status}</td>
                     <td className="px-3 py-2 text-slate-700">{formatDate(project.created_at)}</td>

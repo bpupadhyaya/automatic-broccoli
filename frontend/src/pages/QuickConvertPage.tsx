@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import PageCard from "../components/PageCard";
@@ -25,6 +25,7 @@ const initialState: QuickProjectCreateInput = {
 export default function QuickConvertPage() {
   const [form, setForm] = useState<QuickProjectCreateInput>(initialState);
   const [submitting, setSubmitting] = useState(false);
+  const [activeConversionStep, setActiveConversionStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -34,8 +35,46 @@ export default function QuickConvertPage() {
     [form.target_original_video_url, form.example_original_video_url, form.example_remix_video_url]
   );
 
+  const conversionSteps = useMemo(() => {
+    const steps = [
+      "Validate and normalize submitted URLs.",
+      "Create project with profile defaults and conversion metadata.",
+    ];
+
+    if (form.auto_generate_plan) {
+      steps.push("Generate remix planning assets and manifest.");
+    }
+
+    if (form.run_end_to_end) {
+      steps.push("Download source videos from YouTube.");
+      steps.push("Extract timed clips and build the remix timeline.");
+      steps.push("Render final MP4 output to the configured local folder.");
+    }
+
+    if (form.allow_youtube_upload) {
+      steps.push("Upload remixed output to YouTube with selected privacy.");
+    }
+
+    steps.push("Finalize project status and expose download URL.");
+    return steps;
+  }, [form.auto_generate_plan, form.run_end_to_end, form.allow_youtube_upload]);
+
+  useEffect(() => {
+    if (!submitting) {
+      return;
+    }
+
+    setActiveConversionStep(0);
+    const timer = window.setInterval(() => {
+      setActiveConversionStep((current) => Math.min(current + 1, conversionSteps.length - 1));
+    }, 2200);
+
+    return () => window.clearInterval(timer);
+  }, [submitting, conversionSteps.length]);
+
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setActiveConversionStep(0);
     setSubmitting(true);
     setError(null);
     try {
@@ -224,13 +263,44 @@ export default function QuickConvertPage() {
 
           {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-700">{error}</p>}
 
-          <button
-            type="submit"
-            disabled={!ready || submitting}
-            className="rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
-          >
-            {submitting ? "Creating..." : "Quick Convert"}
-          </button>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[auto_minmax(0,1fr)]">
+            <button
+              type="submit"
+              disabled={!ready || submitting}
+              className="h-fit rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {submitting ? "Converting..." : "Quick Convert"}
+            </button>
+
+            {submitting && (
+              <div className="rounded-md border border-brand-200 bg-brand-50 p-3">
+                <p className="text-sm font-semibold text-brand-800">Conversion Steps</p>
+                <p className="mt-1 text-xs text-brand-700">Detailed progress shown while conversion is running.</p>
+                <ol className="mt-3 space-y-2 text-xs">
+                  {conversionSteps.map((step, index) => {
+                    const isDone = index < activeConversionStep;
+                    const isActive = index === activeConversionStep;
+                    return (
+                      <li key={step} className="flex items-start gap-2">
+                        <span
+                          className={`mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                            isDone
+                              ? "bg-emerald-100 text-emerald-700"
+                              : isActive
+                                ? "bg-brand-200 text-brand-800"
+                                : "bg-slate-200 text-slate-600"
+                          }`}
+                        >
+                          {isDone ? "OK" : isActive ? "..." : `${index + 1}`}
+                        </span>
+                        <span className={isActive ? "font-semibold text-brand-900" : "text-slate-700"}>{step}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+          </div>
         </form>
       </PageCard>
     </div>

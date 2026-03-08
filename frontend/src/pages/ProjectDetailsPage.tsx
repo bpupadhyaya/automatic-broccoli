@@ -241,6 +241,17 @@ export default function ProjectDetailsPage() {
   return (
     <div className="space-y-6">
       <PageCard title={`Project #${project.id}`} subtitle={project.target_original_video_url}>
+        <p className="mb-3 text-sm text-slate-700">
+          <span className="font-semibold">Target Video: </span>
+          <a
+            href={project.target_original_video_url}
+            target="_blank"
+            rel="noreferrer"
+            className="break-all text-brand-700 hover:underline"
+          >
+            {project.target_original_video_url}
+          </a>
+        </p>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
