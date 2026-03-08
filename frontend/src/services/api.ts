@@ -8,6 +8,7 @@ import type {
   ProjectDetail,
   ProjectPlan,
   ProjectSummary,
+  QuickProjectCreateInput,
 } from "../types/project";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
@@ -35,6 +36,13 @@ export function listProjects(): Promise<ProjectSummary[]> {
 
 export function createProject(payload: ProjectCreateInput): Promise<ProjectDetail> {
   return request<ProjectDetail>("/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function quickConvertProject(payload: QuickProjectCreateInput): Promise<ProjectDetail> {
+  return request<ProjectDetail>("/projects/quick-convert", {
     method: "POST",
     body: JSON.stringify(payload),
   });

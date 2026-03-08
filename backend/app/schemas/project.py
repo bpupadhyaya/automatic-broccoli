@@ -11,6 +11,10 @@ CelebrityMode = Literal[
     "licensed_real_celebrity_only",
 ]
 
+QuickRemixProfile = Literal["english", "nepali"]
+QuickCastPreset = Literal["female", "male", "mixed"]
+QuickHeritageMode = Literal["preserve", "swap_to_english", "swap_to_nepali", "mix"]
+
 
 class ORMBaseModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -41,6 +45,16 @@ class ProjectCreate(ORMBaseModel):
     remix_genre: str = Field(min_length=1, max_length=255)
     beat_intensity: str = Field(min_length=1, max_length=255)
     vocal_handling: str = Field(min_length=1, max_length=255)
+
+
+class QuickProjectCreateRequest(ORMBaseModel):
+    target_original_video_url: HttpUrl
+    example_original_video_url: HttpUrl
+    example_remix_video_url: HttpUrl
+    remix_profile: QuickRemixProfile = "english"
+    cast_preset: QuickCastPreset = "mixed"
+    heritage_mode: QuickHeritageMode = "preserve"
+    auto_generate_plan: bool = True
 
 
 class ProjectSummary(ORMBaseModel):

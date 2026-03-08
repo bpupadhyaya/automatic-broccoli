@@ -29,6 +29,14 @@ def _index(seed: str, modulo: int) -> int:
     return int(sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % modulo
 
 
+def _clip(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return value[: limit - 3].rstrip() + "..."
+
+
 class CharacterDesignerService:
     """Generate fictional lead character identity cards for remix projects."""
 
@@ -66,11 +74,11 @@ class CharacterDesignerService:
             cards.append(
                 {
                     "name": name,
-                    "role": "lead singer",
+                    "role": _clip("lead singer", 128),
                     "identity_summary": identity,
-                    "age_range": age_range,
-                    "style_archetype": project.character_style,
-                    "movement_style": movement_style,
+                    "age_range": _clip(age_range, 64),
+                    "style_archetype": _clip(project.character_style, 128),
+                    "movement_style": _clip(movement_style, 255),
                     "face_features_json": {
                         "face_shape": face_shape,
                         "skin_tone": skin_tone,

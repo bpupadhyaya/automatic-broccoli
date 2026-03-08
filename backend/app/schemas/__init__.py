@@ -6,6 +6,7 @@ from app.schemas.project import (
     ProjectDetail,
     ProjectListItem,
     ProjectPlanResponse,
+    QuickProjectCreateRequest,
     RemixProjectRead,
     ProjectSummary,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "ApplyCharacterToShotsResponse",
     "ManifestResponse",
     "ProjectCreate",
+    "QuickProjectCreateRequest",
     "ProjectDetail",
     "ProjectListItem",
     "ProjectPlanResponse",

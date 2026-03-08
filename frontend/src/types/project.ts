@@ -114,3 +114,17 @@ export interface ApplyCharacterToShotsResponse {
   character_id: number;
   updated_shot_count: number;
 }
+
+export type QuickRemixProfile = "english" | "nepali";
+export type QuickCastPreset = "female" | "male" | "mixed";
+export type QuickHeritageMode = "preserve" | "swap_to_english" | "swap_to_nepali" | "mix";
+
+export interface QuickProjectCreateInput {
+  target_original_video_url: string;
+  example_original_video_url: string;
+  example_remix_video_url: string;
+  remix_profile: QuickRemixProfile;
+  cast_preset: QuickCastPreset;
+  heritage_mode: QuickHeritageMode;
+  auto_generate_plan: boolean;
+}
