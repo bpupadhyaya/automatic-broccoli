@@ -143,6 +143,12 @@ DATABASE_URL=postgresql://user:password@localhost:5432/remixdb
 - `POST /api/projects/{project_id}/shots/{shot_id}/manual-override`
 - `POST /api/projects/{project_id}/export`
 - `GET /api/projects/{project_id}/manifest`
+- `POST /api/projects/{project_id}/characters/generate`
+- `GET /api/projects/{project_id}/characters`
+- `GET /api/characters/{character_id}`
+- `POST /api/characters/{character_id}/lock`
+- `POST /api/characters/{character_id}/regenerate-assets`
+- `POST /api/projects/{project_id}/characters/apply-to-shots`
 
 Additional utility endpoint:
 
@@ -187,6 +193,11 @@ New backend modules include:
 - `app/services/providers/runway.py`
 - `app/services/providers/veo.py`
 - `app/services/providers/luma.py`
+- `app/services/character_designer.py`
+- `app/services/character_asset_manager.py`
+- `app/services/consistency_prompt_injector.py`
+- `app/services/identity_scorer.py`
+- `app/services/wardrobe_scorer.py`
 - `app/services/qc_scoring.py`
 - `app/services/rerender_policy.py`
 - `app/services/beat_sync.py`

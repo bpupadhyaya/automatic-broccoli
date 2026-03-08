@@ -12,13 +12,17 @@ from app.schemas.render_job import RenderJobBrief, StartRenderRequest, StartRend
 from app.schemas.shot import BuildShotsRequest, BuildShotsResponse, ListShotsResponse, ManualShotOverrideRequest, ShotRead
 from app.services import job_state
 from app.services.audio_analyzer import analyze_song
-from app.services.character_pack_generator import generate_character_pack
+from app.services.character_asset_manager import CharacterAssetManagerService
+from app.services.character_designer import CharacterDesignerService
+from app.services.consistency_prompt_injector import inject_character_locks
+from app.services.identity_scorer import IdentityScorerService
 from app.services.qc_scoring import score_shot
 from app.services.remix_planner import run_remix_planner
 from app.services.render_queue import render_project_shots
 from app.services.rerender_policy import decide_qc_action
 from app.services.scene_segmenter import segment_scenes
 from app.services.shot_builder import build_shots
+from app.services.wardrobe_scorer import WardrobeScorerService
 
 router = APIRouter()
 
@@ -81,26 +85,67 @@ def build_project_shots(project_id: int, payload: BuildShotsRequest, db: Session
 
     db.query(RenderJob).filter(RenderJob.project_id == project.id).delete(synchronize_session=False)
     db.query(Shot).filter(Shot.project_id == project.id).delete(synchronize_session=False)
-    db.query(Character).filter(Character.project_id == project.id).delete(synchronize_session=False)
 
-    cast_name = (
-        (project.character_bible or {}).get("cast_name")
-        if isinstance(project.character_bible, dict)
-        else None
-    ) or f"Lead Performer {project.id}"
-
-    character_pack_data = generate_character_pack(project, cast_name)
-    character = Character(project_id=project.id, **character_pack_data)
-    db.add(character)
-    db.flush()
+    character = (
+        db.query(Character)
+        .filter(
+            Character.project_id == project.id,
+            Character.role.in_(["lead singer", "lead"]),
+            Character.is_locked.is_(True),
+        )
+        .order_by(Character.id.asc())
+        .first()
+    )
+    if not character:
+        generated = CharacterDesignerService().generate_candidates(project, candidate_count=1)[0]
+        character = Character(
+            project_id=project.id,
+            name=generated["name"],
+            role=generated["role"],
+            identity_json=generated["identity_json"],
+            reference_asset_urls=[],
+            consistency_rules_json=generated["consistency_rules_json"],
+            identity_summary=generated["identity_summary"],
+            age_range=generated["age_range"],
+            style_archetype=generated["style_archetype"],
+            face_features_json=generated["face_features_json"],
+            body_features_json=generated["body_features_json"],
+            movement_style=generated["movement_style"],
+            is_locked=True,
+        )
+        db.add(character)
+        db.flush()
+        assets, _ = CharacterAssetManagerService().regenerate_assets(db, character)
+        character.reference_asset_urls = [item.asset_url for item in assets]
+        db.add(character)
+        db.flush()
+    elif not character.reference_asset_urls:
+        assets, _ = CharacterAssetManagerService().regenerate_assets(db, character)
+        character.reference_asset_urls = [item.asset_url for item in assets]
+        db.add(character)
+        db.flush()
 
     audio_analysis = analyze_song(project)
     scene_data = segment_scenes(audio_analysis)
-    shot_dicts = build_shots(project, scene_data, character_pack_data)
+    shot_dicts = build_shots(
+        project,
+        scene_data,
+        {"name": character.name, "reference_asset_urls": character.reference_asset_urls},
+    )
     shot_dicts = _apply_contract_controls(shot_dicts, payload)
 
     shot_models: list[Shot] = []
     for item in shot_dicts:
+        scene_context = f"{item['section']} at {item['location']}"
+        shot_language = f"{item['shot_type']}, {item['camera_move']}, {item['lighting_note']}"
+        prompt = inject_character_locks(
+            character=character,
+            base_prompt=item["prompt"],
+            scene_context=scene_context,
+            shot_language=shot_language,
+            outfit_description=item["wardrobe"],
+        )
+        cast_members = [character.name] + [member for member in item["cast"] if member != character.name]
         shot = Shot(
             project_id=project.id,
             shot_code=item["shot_code"],
@@ -112,12 +157,12 @@ def build_project_shots(project_id: int, payload: BuildShotsRequest, db: Session
             camera_framing=item["camera_framing"],
             camera_move=item["camera_move"],
             location=item["location"],
-            cast_json=item["cast"],
+            cast_json=cast_members,
             wardrobe=item["wardrobe"],
             choreography_note=item["choreography_note"],
             lighting_note=item["lighting_note"],
-            prompt=item["prompt"],
-            references_json=item["references"],
+            prompt=prompt,
+            references_json=character.reference_asset_urls,
             priority_score=item["priority_score"],
             status=job_state.PLANNED,
         )
@@ -125,6 +170,7 @@ def build_project_shots(project_id: int, payload: BuildShotsRequest, db: Session
         shot_models.append(shot)
 
     project.status = "shots_built"
+    project.consistency_rules = character.consistency_rules_json
     db.add(project)
     db.commit()
 
@@ -149,6 +195,20 @@ def list_project_shots(project_id: int, db: Session = Depends(get_db)) -> ListSh
 @router.post("/{project_id}/render", response_model=StartRenderResponse)
 def render_project(project_id: int, payload: StartRenderRequest, db: Session = Depends(get_db)) -> StartRenderResponse:
     project = get_project_or_404(project_id, db)
+    locked_lead = (
+        db.query(Character)
+        .filter(
+            Character.project_id == project.id,
+            Character.role.in_(["lead singer", "lead"]),
+            Character.is_locked.is_(True),
+        )
+        .first()
+    )
+    if not locked_lead:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lead performer must be locked before rendering. Generate and lock a character first.",
+        )
 
     query = db.query(Shot).filter(Shot.project_id == project.id)
     if payload.shot_ids:
@@ -176,6 +236,25 @@ def render_project(project_id: int, payload: StartRenderRequest, db: Session = D
 @router.post("/{project_id}/qc", response_model=QCRunResponse)
 def run_qc(project_id: int, payload: QCRunRequest, db: Session = Depends(get_db)) -> QCRunResponse:
     project = get_project_or_404(project_id, db)
+    locked_lead = (
+        db.query(Character)
+        .filter(
+            Character.project_id == project.id,
+            Character.role.in_(["lead singer", "lead"]),
+            Character.is_locked.is_(True),
+        )
+        .order_by(Character.id.asc())
+        .first()
+    )
+    if not locked_lead:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lead performer must be locked before QC. Generate and lock a character first.",
+        )
+
+    identity_scorer = IdentityScorerService()
+    wardrobe_scorer = WardrobeScorerService()
+
     query = db.query(Shot).filter(
         Shot.project_id == project.id,
         Shot.status.in_(
@@ -197,8 +276,36 @@ def run_qc(project_id: int, payload: QCRunRequest, db: Session = Depends(get_db)
 
     results: list[QCResultRead] = []
     for shot in shots:
-        metrics = score_shot(shot.shot_code)
-        decision = decide_qc_action(metrics["overall_score"])
+        latest_job = (
+            db.query(RenderJob)
+            .filter(RenderJob.shot_id == shot.id)
+            .order_by(RenderJob.updated_at.desc(), RenderJob.id.desc())
+            .first()
+        )
+        output_url = latest_job.output_url if latest_job and latest_job.output_url else (latest_job.raw_output_url if latest_job else None)
+
+        base_metrics = score_shot(shot.shot_code)
+        identity_metrics = identity_scorer.score(shot.id, locked_lead, output_url)
+        wardrobe_metrics = wardrobe_scorer.score(shot.id, locked_lead, output_url)
+        overall_consistency_score = round(
+            (
+                identity_metrics["identity_score"]
+                + identity_metrics["hair_match_score"]
+                + identity_metrics["accessory_match_score"]
+                + wardrobe_metrics["wardrobe_match_score"]
+            )
+            / 4,
+            2,
+        )
+        overall_score = round((base_metrics["overall_score"] * 0.5) + (overall_consistency_score * 0.5), 2)
+        metrics = {
+            **base_metrics,
+            **identity_metrics,
+            **wardrobe_metrics,
+            "overall_consistency_score": overall_consistency_score,
+            "overall_score": overall_score,
+        }
+        decision = decide_qc_action(overall_consistency_score)
 
         if decision == "approved":
             shot.status = job_state.QC_APPROVED
@@ -212,13 +319,6 @@ def run_qc(project_id: int, payload: QCRunRequest, db: Session = Depends(get_db)
 
         shot.qc_score = metrics["overall_score"]
         db.add(shot)
-
-        latest_job = (
-            db.query(RenderJob)
-            .filter(RenderJob.shot_id == shot.id)
-            .order_by(RenderJob.updated_at.desc(), RenderJob.id.desc())
-            .first()
-        )
         if latest_job:
             latest_job.qc_result_json = metrics
             latest_job.status = shot.status
@@ -231,7 +331,7 @@ def run_qc(project_id: int, payload: QCRunRequest, db: Session = Depends(get_db)
                 render_job_id=(latest_job.id if latest_job else None),
                 scores_json=metrics,
                 identity_score=metrics["identity_score"],
-                wardrobe_score=metrics["wardrobe_score"],
+                wardrobe_score=metrics["wardrobe_match_score"],
                 motion_score=metrics["motion_score"],
                 prompt_match_score=metrics["prompt_match_score"],
                 overall_score=metrics["overall_score"],
@@ -242,10 +342,15 @@ def run_qc(project_id: int, payload: QCRunRequest, db: Session = Depends(get_db)
         results.append(
             QCResultRead(
                 shot_id=shot.id,
+                character_id=locked_lead.id,
                 identity_score=metrics["identity_score"],
-                wardrobe_score=metrics["wardrobe_score"],
+                hair_match_score=metrics["hair_match_score"],
+                wardrobe_score=metrics["wardrobe_match_score"],
+                wardrobe_match_score=metrics["wardrobe_match_score"],
+                accessory_match_score=metrics["accessory_match_score"],
                 motion_score=metrics["motion_score"],
                 prompt_match_score=metrics["prompt_match_score"],
+                overall_consistency_score=metrics["overall_consistency_score"],
                 overall_score=metrics["overall_score"],
                 decision=decision,
             )

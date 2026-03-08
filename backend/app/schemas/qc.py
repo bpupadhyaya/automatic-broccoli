@@ -13,10 +13,15 @@ class QCRunRequest(BaseModel):
 
 class QCResultRead(BaseModel):
     shot_id: int
+    character_id: Optional[int] = None
     identity_score: float
+    hair_match_score: Optional[float] = None
     wardrobe_score: float
+    wardrobe_match_score: Optional[float] = None
+    accessory_match_score: Optional[float] = None
     motion_score: float
     prompt_match_score: float
+    overall_consistency_score: Optional[float] = None
     overall_score: float
     decision: str
 

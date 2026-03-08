@@ -19,6 +19,45 @@ class Character(Base):
     identity_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     reference_asset_urls: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     consistency_rules_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    identity_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    age_range: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    style_archetype: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    face_features_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    body_features_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    movement_style: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_locked: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CharacterAsset(Base):
+    __tablename__ = "character_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    asset_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    prompt_used: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CharacterOutfit(Base):
+    __tablename__ = "character_outfits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    outfit_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    palette_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_asset_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

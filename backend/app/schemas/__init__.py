@@ -9,6 +9,19 @@ from app.schemas.project import (
     RemixProjectRead,
     ProjectSummary,
 )
+from app.schemas.character import (
+    ApplyCharacterToShotsRequest,
+    ApplyCharacterToShotsResponse,
+    CharacterAssetRead,
+    CharacterDetailResponse,
+    CharacterGenerateRequest,
+    CharacterGenerateResponse,
+    CharacterIdentityCard,
+    CharacterListResponse,
+    CharacterLockResponse,
+    CharacterOutfitRead,
+    CharacterRead,
+)
 from app.schemas.export import ExportRead, ExportRequest, ExportResponse
 from app.schemas.provider import ProviderCancelResponse, ProviderJobStatusResponse, ProviderSubmitResponse
 from app.schemas.qc import QCResultRead, QCRunRequest, QCRunResponse
@@ -26,6 +39,17 @@ from app.schemas.shot import (
 __all__ = [
     "CharacterProfile",
     "CharacterBible",
+    "CharacterIdentityCard",
+    "CharacterAssetRead",
+    "CharacterOutfitRead",
+    "CharacterRead",
+    "CharacterDetailResponse",
+    "CharacterGenerateRequest",
+    "CharacterGenerateResponse",
+    "CharacterListResponse",
+    "CharacterLockResponse",
+    "ApplyCharacterToShotsRequest",
+    "ApplyCharacterToShotsResponse",
     "ManifestResponse",
     "ProjectCreate",
     "ProjectDetail",

@@ -1,4 +1,14 @@
-import type { ManifestResponse, ProjectCreateInput, ProjectDetail, ProjectPlan, ProjectSummary } from "../types/project";
+import type {
+  ApplyCharacterToShotsResponse,
+  CharacterGenerateResponse,
+  CharacterListResponse,
+  CharacterLockResponse,
+  ManifestResponse,
+  ProjectCreateInput,
+  ProjectDetail,
+  ProjectPlan,
+  ProjectSummary,
+} from "../types/project";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
@@ -42,4 +52,34 @@ export function generateProjectPlan(projectId: number): Promise<ProjectPlan> {
 
 export function getManifest(projectId: number): Promise<ManifestResponse> {
   return request<ManifestResponse>(`/projects/${projectId}/manifest`);
+}
+
+export function generateCharacters(projectId: number, candidateCount = 3): Promise<CharacterGenerateResponse> {
+  return request<CharacterGenerateResponse>(`/projects/${projectId}/characters/generate`, {
+    method: "POST",
+    body: JSON.stringify({ candidate_count: candidateCount }),
+  });
+}
+
+export function listCharacters(projectId: number): Promise<CharacterListResponse> {
+  return request<CharacterListResponse>(`/projects/${projectId}/characters`);
+}
+
+export function lockCharacter(characterId: number): Promise<CharacterLockResponse> {
+  return request<CharacterLockResponse>(`/characters/${characterId}/lock`, {
+    method: "POST",
+  });
+}
+
+export function regenerateCharacterAssets(characterId: number): Promise<unknown> {
+  return request<unknown>(`/characters/${characterId}/regenerate-assets`, {
+    method: "POST",
+  });
+}
+
+export function applyCharacterToShots(projectId: number, characterId: number): Promise<ApplyCharacterToShotsResponse> {
+  return request<ApplyCharacterToShotsResponse>(`/projects/${projectId}/characters/apply-to-shots`, {
+    method: "POST",
+    body: JSON.stringify({ character_id: characterId }),
+  });
 }

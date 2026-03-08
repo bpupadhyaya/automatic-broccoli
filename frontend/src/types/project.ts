@@ -78,3 +78,39 @@ export interface ManifestResponse {
   project_id: number;
   manifest: Record<string, unknown>;
 }
+
+export interface CharacterSummary {
+  id: number;
+  project_id: number;
+  name: string;
+  role: string;
+  identity_summary: string | null;
+  age_range: string | null;
+  style_archetype: string | null;
+  movement_style: string | null;
+  is_locked: boolean;
+  identity_json: Record<string, unknown>;
+  reference_asset_urls: string[];
+  consistency_rules_json: string[];
+  created_at: string;
+}
+
+export interface CharacterListResponse {
+  project_id: number;
+  characters: CharacterSummary[];
+}
+
+export interface CharacterGenerateResponse {
+  project_id: number;
+  candidates: CharacterSummary[];
+}
+
+export interface CharacterLockResponse {
+  character: CharacterSummary;
+}
+
+export interface ApplyCharacterToShotsResponse {
+  project_id: number;
+  character_id: number;
+  updated_shot_count: number;
+}
