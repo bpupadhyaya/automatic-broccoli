@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import PageCard from "../components/PageCard";
@@ -22,6 +22,10 @@ const initialState: QuickProjectCreateInput = {
   youtube_privacy_status: "private",
 };
 
+const SAMPLE_TARGET_URL = "https://www.youtube.com/watch?v=Ubm7DWRSrg4&list=RDUbm7DWRSrg4&start_radio=1";
+const SAMPLE_EXAMPLE_ORIGINAL_URL = "https://www.youtube.com/watch?v=EsTt9jy_mG8&list=RDEsTt9jy_mG8&start_radio=1";
+const SAMPLE_EXAMPLE_REMIX_URL = "https://www.youtube.com/watch?v=3JSbeTVVn_E&list=RD3JSbeTVVn_E&start_radio=1";
+
 function mapBackendStageToStepIndex(stage: string | null | undefined, stepCount: number): number {
   const normalized = (stage ?? "").toLowerCase();
   if (!normalized) {
@@ -39,10 +43,10 @@ function mapBackendStageToStepIndex(stage: string | null | undefined, stepCount:
   if (normalized.includes("cast synthesis") || normalized.includes("segment planning")) {
     return Math.min(stepCount - 1, 3);
   }
-  if (normalized.includes("render segments")) {
+  if (normalized.includes("render segments") || normalized.includes("render voice") || normalized.includes("face synthesis")) {
     return Math.min(stepCount - 1, 4);
   }
-  if (normalized.includes("compose output") || normalized.includes("finalize")) {
+  if (normalized.includes("compose output") || normalized.includes("finalize") || normalized.includes("mux")) {
     return Math.min(stepCount - 1, 5);
   }
   if (normalized.includes("upload")) {
@@ -63,7 +67,9 @@ export default function QuickConvertPage() {
   const [backendProgressRatio, setBackendProgressRatio] = useState(0);
   const [backendStage, setBackendStage] = useState<string | null>(null);
   const [backendExecution, setBackendExecution] = useState<string | null>(null);
+  const [autoScrollFeed, setAutoScrollFeed] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const activityFeedContainerRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
   const ready = useMemo(
@@ -107,7 +113,7 @@ export default function QuickConvertPage() {
       );
 
       const messages = progressPayload.processing_steps.map((step) => `${step.stage}: ${step.detail}`);
-      setActivityFeed(messages.slice(-24));
+      setActivityFeed(messages);
 
       if (progressPayload.execution === "completed") {
         setActiveConversionStep(conversionSteps.length - 1);
@@ -142,6 +148,24 @@ export default function QuickConvertPage() {
     };
   }, [submitting, conversionProjectId, conversionSteps.length, navigate]);
 
+  const scrollActivityToBottom = () => {
+    const container = activityFeedContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  };
+
+  useEffect(() => {
+    if (!autoScrollFeed) {
+      return;
+    }
+    const handle = window.requestAnimationFrame(() => {
+      scrollActivityToBottom();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [activityFeed, autoScrollFeed]);
+
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setActiveConversionStep(0);
@@ -150,6 +174,7 @@ export default function QuickConvertPage() {
     setBackendProgressRatio(0);
     setBackendStage(null);
     setBackendExecution(null);
+    setAutoScrollFeed(true);
     setSubmitting(true);
     setError(null);
     try {
@@ -186,33 +211,60 @@ export default function QuickConvertPage() {
           <div className="grid grid-cols-1 gap-4">
             <label className="space-y-1 text-sm">
               <span className="font-medium text-slate-700">Target Original Video URL</span>
-              <input
-                type="url"
-                required
-                value={form.target_original_video_url}
-                onChange={(event) => setForm((prev) => ({ ...prev, target_original_video_url: event.target.value }))}
-                className="w-full rounded-md border border-slate-300 px-3 py-2"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="url"
+                  required
+                  value={form.target_original_video_url}
+                  onChange={(event) => setForm((prev) => ({ ...prev, target_original_video_url: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+                <button
+                  type="button"
+                  onClick={() => setForm((prev) => ({ ...prev, target_original_video_url: SAMPLE_TARGET_URL }))}
+                  className="rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                >
+                  Sample
+                </button>
+              </div>
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium text-slate-700">Example Original Video URL</span>
-              <input
-                type="url"
-                required
-                value={form.example_original_video_url}
-                onChange={(event) => setForm((prev) => ({ ...prev, example_original_video_url: event.target.value }))}
-                className="w-full rounded-md border border-slate-300 px-3 py-2"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="url"
+                  required
+                  value={form.example_original_video_url}
+                  onChange={(event) => setForm((prev) => ({ ...prev, example_original_video_url: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+                <button
+                  type="button"
+                  onClick={() => setForm((prev) => ({ ...prev, example_original_video_url: SAMPLE_EXAMPLE_ORIGINAL_URL }))}
+                  className="rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                >
+                  Sample
+                </button>
+              </div>
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium text-slate-700">Example Remix Video URL</span>
-              <input
-                type="url"
-                required
-                value={form.example_remix_video_url}
-                onChange={(event) => setForm((prev) => ({ ...prev, example_remix_video_url: event.target.value }))}
-                className="w-full rounded-md border border-slate-300 px-3 py-2"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="url"
+                  required
+                  value={form.example_remix_video_url}
+                  onChange={(event) => setForm((prev) => ({ ...prev, example_remix_video_url: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+                <button
+                  type="button"
+                  onClick={() => setForm((prev) => ({ ...prev, example_remix_video_url: SAMPLE_EXAMPLE_REMIX_URL }))}
+                  className="rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                >
+                  Sample
+                </button>
+              </div>
             </label>
           </div>
 
@@ -374,6 +426,14 @@ export default function QuickConvertPage() {
                     {(backendProgressRatio * 100).toFixed(1)}% ({backendExecution ?? "queued"})
                   </p>
                 </div>
+                <div className="mt-2">
+                  <div className="h-2 w-full overflow-hidden rounded bg-brand-100">
+                    <div
+                      className="h-full rounded bg-brand-500 transition-all duration-300"
+                      style={{ width: `${Math.max(2, Math.min(100, backendProgressRatio * 100))}%` }}
+                    />
+                  </div>
+                </div>
                 <ol className="mt-3 space-y-2 text-xs">
                   {conversionSteps.map((step, index) => {
                     const isDone = index < activeConversionStep;
@@ -398,22 +458,58 @@ export default function QuickConvertPage() {
                 </ol>
 
                 <div className="mt-4 rounded-md border border-brand-100 bg-white/80 p-3">
-                  <p className="text-xs font-semibold text-brand-800">Fine-Grained Remix Activity</p>
-                  <ul className="mt-2 space-y-1.5 text-xs text-slate-700">
-                    {activityFeed.map((message, index) => {
-                      const isLatest = index === activityFeed.length - 1;
-                      return (
-                        <li key={`${index}-${message}`} className="flex items-start gap-2">
-                          <span className={`mt-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full text-[9px] font-semibold ${
-                            isLatest ? "bg-brand-200 text-brand-800" : "bg-emerald-100 text-emerald-700"
-                          }`}>
-                            {isLatest ? "..." : "OK"}
-                          </span>
-                          <span className={isLatest ? "font-semibold text-brand-900" : "text-slate-700"}>{message}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-brand-800">Fine-Grained Remix Activity</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAutoScrollFeed((current) => {
+                            const next = !current;
+                            if (next) {
+                              window.requestAnimationFrame(() => {
+                                scrollActivityToBottom();
+                              });
+                            }
+                            return next;
+                          });
+                        }}
+                        className="rounded border border-brand-200 bg-white px-2 py-1 text-[10px] font-semibold text-brand-700 hover:bg-brand-50"
+                      >
+                        {autoScrollFeed ? "Pause Auto-Scroll" : "Resume Auto-Scroll"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          scrollActivityToBottom();
+                          setAutoScrollFeed(true);
+                        }}
+                        className="rounded border border-brand-200 bg-white px-2 py-1 text-[10px] font-semibold text-brand-700 hover:bg-brand-50"
+                      >
+                        Jump to Latest
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    ref={activityFeedContainerRef}
+                    className="mt-2 max-h-64 overflow-y-auto pr-1"
+                  >
+                    <ul className="space-y-1.5 text-xs text-slate-700">
+                      {activityFeed.map((message, index) => {
+                        const isLatest = index === activityFeed.length - 1;
+                        return (
+                          <li key={`${index}-${message}`} className="flex items-start gap-2">
+                            <span className={`mt-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full text-[9px] font-semibold ${
+                              isLatest ? "bg-brand-200 text-brand-800" : "bg-emerald-100 text-emerald-700"
+                            }`}>
+                              {isLatest ? "..." : "OK"}
+                            </span>
+                            <span className={isLatest ? "font-semibold text-brand-900" : "text-slate-700"}>{message}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 </div>
               </div>
             )}

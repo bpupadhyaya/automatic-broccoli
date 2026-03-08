@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Callable
 
+import numpy as np
+import cv2
 from yt_dlp import YoutubeDL
 
 from app.config import settings
@@ -580,48 +582,125 @@ class LocalQuickRemixService:
         style_profile = self._build_actor_transform_blueprint(transformation_profile, cast_plan, segment_plan)
         video_filter = self._build_full_length_video_filter(style_profile)
         audio_filter = self._build_full_length_audio_filter(style_profile)
-
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(target_video),
-            "-filter_complex",
-            f"{video_filter};{audio_filter}",
-            "-map",
-            "[vout]",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-movflags",
-            "+faststart",
-            "-progress",
-            "pipe:2",
-            "-nostats",
-            str(output_video_path),
-        ]
+        styled_video_path = output_video_path.with_name(f"{output_video_path.stem}_styled_video.mp4")
+        transformed_audio_path = output_video_path.with_name(f"{output_video_path.stem}_voice_track.m4a")
+        actor_replaced_video_path = output_video_path.with_name(f"{output_video_path.stem}_actor_replaced.mp4")
 
         self._run_ffmpeg_with_progress(
-            command=command,
+            command=[
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(target_video),
+                "-filter_complex",
+                video_filter,
+                "-map",
+                "[vout]",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "19",
+                "-movflags",
+                "+faststart",
+                "-progress",
+                "pipe:2",
+                "-nostats",
+                str(styled_video_path),
+            ],
             duration_sec=duration_sec,
             processing_steps=processing_steps,
             progress_callback=progress_callback,
             progress_start=0.62,
+            progress_end=0.74,
+            stage="Render Segments",
+            detail_prefix="Rendering cinematic base stream for actor replacement",
+        )
+
+        self._run_ffmpeg_with_progress(
+            command=[
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(target_video),
+                "-filter_complex",
+                audio_filter,
+                "-map",
+                "[aout]",
+                "-vn",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-progress",
+                "pipe:2",
+                "-nostats",
+                str(transformed_audio_path),
+            ],
+            duration_sec=duration_sec,
+            processing_steps=processing_steps,
+            progress_callback=progress_callback,
+            progress_start=0.74,
+            progress_end=0.80,
+            stage="Render Voice",
+            detail_prefix="Preserving original lyrics while transforming vocal identity",
+        )
+
+        self._run_frame_actor_replacement(
+            styled_video=styled_video_path,
+            actor_video=actor_replaced_video_path,
+            cast_plan=cast_plan,
+            segment_plan=segment_plan,
+            processing_steps=processing_steps,
+            progress_callback=progress_callback,
+            progress_start=0.80,
+            progress_end=0.90,
+        )
+
+        self._run_ffmpeg_with_progress(
+            command=[
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(actor_replaced_video_path),
+                "-i",
+                str(transformed_audio_path),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                "-progress",
+                "pipe:2",
+                "-nostats",
+                str(output_video_path),
+            ],
+            duration_sec=duration_sec,
+            processing_steps=processing_steps,
+            progress_callback=progress_callback,
+            progress_start=0.90,
             progress_end=0.92,
             stage="Render Segments",
-            detail_prefix="Applying full-length fictitious actor and voice transformation",
+            detail_prefix="Muxing transformed actors with remixed vocals",
         )
+
+        self._safe_unlink(styled_video_path)
+        self._safe_unlink(transformed_audio_path)
+        self._safe_unlink(actor_replaced_video_path)
 
     def _build_actor_transform_blueprint(
         self,
@@ -641,7 +720,6 @@ class LocalQuickRemixService:
 
         heritage_offset = {"english": 4.0, "nepali": 10.0, "hindi": 14.0}
         lead_offset = heritage_offset.get(lead_heritage, 8.0)
-        mask_intensity = 26.0 if lead_gender == "female" else 24.0
         variation_strength = self._clamp(0.9 + (len(segment_plan) / 180.0), 0.95, 1.4)
 
         pitch_factor = 1.13 if lead_gender == "female" else 0.9
@@ -659,9 +737,8 @@ class LocalQuickRemixService:
             "hue_amp": self._clamp(8.0 * variation_strength, 4.0, 13.0),
             "hue_saturation": self._clamp(1.08 + (0.08 * variation_strength), 1.02, 1.24),
             "curve_preset": style_curve,
-            "blur_sigma": 0.22 if lead_gender == "female" else 0.18,
-            "noise_level": self._clamp(mask_intensity * 0.24, 3.5, 7.0),
-            "mask_pixel_size": self._clamp(mask_intensity, 22.0, 36.0),
+            "noise_level": self._clamp(4.4 * variation_strength, 3.0, 6.8),
+            "identity_blend": 0.88 if lead_gender == "female" else 0.85,
             "pitch_factor": self._clamp(pitch_factor, 0.84, 1.22),
             "bass_gain": 1.8 if lead_gender == "male" else -1.0,
             "presence_gain": 2.9 if lead_gender == "female" else 1.9,
@@ -671,8 +748,6 @@ class LocalQuickRemixService:
         }
 
     def _build_full_length_video_filter(self, style: dict[str, float | str]) -> str:
-        pixel_size = int(round(float(style["mask_pixel_size"])))
-        side_pixel = max(16, pixel_size - 4)
         base_hue = float(style["base_hue"])
         hue_amp = float(style["hue_amp"])
         return (
@@ -685,22 +760,8 @@ class LocalQuickRemixService:
             f"gamma={float(style['gamma']):.4f},"
             f"hue=h={base_hue:.3f}+{hue_amp:.3f}*sin(t*0.65):s={float(style['hue_saturation']):.4f},"
             f"curves=preset={style['curve_preset']},"
-            f"gblur=sigma={float(style['blur_sigma']):.3f},"
             f"noise=alls={float(style['noise_level']):.3f}:allf=t,"
-            "split=4[base][r1][r2][r3];"
-            "[r1]crop=w=iw*0.42:h=ih*0.34:x=iw*0.29:y=ih*0.05,"
-            f"pixelize=w={pixel_size}:h={pixel_size},"
-            "eq=contrast=1.35:saturation=1.55,hue=h=20:s=1.20[r1m];"
-            "[r2]crop=w=iw*0.28:h=ih*0.30:x=iw*0.05:y=ih*0.09,"
-            f"pixelize=w={side_pixel}:h={side_pixel},"
-            "eq=contrast=1.25:saturation=1.45,hue=h=-14:s=1.12[r2m];"
-            "[r3]crop=w=iw*0.28:h=ih*0.30:x=iw*0.67:y=ih*0.09,"
-            f"pixelize=w={side_pixel}:h={side_pixel},"
-            "eq=contrast=1.25:saturation=1.45,hue=h=14:s=1.12[r3m];"
-            "[base][r1m]overlay=x=main_w*0.29+12*sin(t*1.7):y=main_h*0.05+7*cos(t*1.4)[m1];"
-            "[m1][r2m]overlay=x=main_w*0.05+9*sin(t*1.1):y=main_h*0.09+6*cos(t*1.3)[m2];"
-            "[m2][r3m]overlay=x=main_w*0.67+9*cos(t*1.2):y=main_h*0.09+6*sin(t*1.0),"
-            "unsharp=7:7:0.72:5:5:0.00,format=yuv420p[vout]"
+            "unsharp=7:7:1.10:5:5:0.00,format=yuv420p[vout]"
         )
 
     def _build_full_length_audio_filter(self, style: dict[str, float | str]) -> str:
@@ -715,6 +776,345 @@ class LocalQuickRemixService:
             f"aecho=0.82:0.88:{int(float(style['echo_delay']))}:{float(style['echo_decay']):.3f},"
             f"volume={float(style['volume']):.4f}[aout]"
         )
+
+    def _run_frame_actor_replacement(
+        self,
+        styled_video: Path,
+        actor_video: Path,
+        cast_plan: list[dict[str, Any]],
+        segment_plan: list[dict[str, Any]],
+        processing_steps: list[dict[str, Any]],
+        progress_callback: Callable[[dict[str, Any]], None] | None,
+        progress_start: float,
+        progress_end: float,
+    ) -> None:
+        cascade = self._load_face_cascade()
+        capture = cv2.VideoCapture(str(styled_video))
+        if not capture.isOpened():
+            raise RuntimeError(f"Unable to open styled video for actor replacement: {styled_video}")
+
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if width <= 0 or height <= 0:
+            capture.release()
+            raise RuntimeError("Invalid styled video dimensions for actor replacement")
+
+        writer = cv2.VideoWriter(
+            str(actor_video),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (width, height),
+        )
+        if not writer.isOpened():
+            capture.release()
+            raise RuntimeError(f"Unable to open output writer for actor replacement: {actor_video}")
+
+        detection_every = 3
+        progress_step = max(1, frame_count // 45) if frame_count > 0 else 60
+        last_boxes: list[tuple[int, int, int, int]] = []
+        stale_detection_frames = 0
+        segment_cursor = 0
+        frame_index = 0
+
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+
+                timestamp_sec = frame_index / max(fps, 1.0)
+                while segment_cursor + 1 < len(segment_plan):
+                    if timestamp_sec < self._segment_end_sec(segment_plan[segment_cursor]):
+                        break
+                    segment_cursor += 1
+                performer = self._segment_performer(segment_plan, segment_cursor, cast_plan)
+
+                should_detect = frame_index % detection_every == 0 or not last_boxes
+                current_boxes = list(last_boxes)
+                if should_detect and cascade is not None:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    detections = cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(48, 48))
+                    detected_boxes = self._normalize_face_boxes(detections, width, height)
+                    if detected_boxes:
+                        current_boxes = detected_boxes
+                        last_boxes = detected_boxes
+                        stale_detection_frames = 0
+                    else:
+                        stale_detection_frames += 1
+                        if stale_detection_frames > 15:
+                            last_boxes = []
+                            current_boxes = []
+                elif last_boxes:
+                    stale_detection_frames += 1
+                    if stale_detection_frames > 15:
+                        last_boxes = []
+                        current_boxes = []
+
+                if not current_boxes:
+                    current_boxes = self._fallback_face_boxes(width, height, performer)
+
+                frame = self._apply_fictitious_actor_faces(
+                    frame=frame,
+                    face_boxes=current_boxes,
+                    performer=performer,
+                    frame_index=frame_index,
+                )
+                writer.write(frame)
+                frame_index += 1
+
+                if frame_count > 0 and (frame_index == 1 or frame_index % progress_step == 0 or frame_index >= frame_count):
+                    ratio = self._clamp(frame_index / max(frame_count, 1), 0.0, 1.0)
+                    mapped = self._clamp(
+                        progress_start + (progress_end - progress_start) * ratio,
+                        progress_start,
+                        progress_end,
+                    )
+                    performer_name = str(performer.get("name") or "fictitious cast")
+                    self._append_processing_step(
+                        processing_steps,
+                        "Face Synthesis",
+                        f"Replacing detected actors with synthesized fictitious cast identities ({int(ratio * 100)}%) [{performer_name}]",
+                        mapped,
+                        callback=progress_callback,
+                    )
+        finally:
+            capture.release()
+            writer.release()
+
+    def _segment_end_sec(self, segment: dict[str, Any]) -> float:
+        start = float(segment.get("source_start_sec") or segment.get("output_start_sec") or 0.0)
+        duration = float(segment.get("source_duration_sec") or segment.get("output_duration_sec") or segment.get("duration_sec") or 0.0)
+        return start + max(duration, 0.01)
+
+    def _segment_performer(
+        self,
+        segment_plan: list[dict[str, Any]],
+        segment_cursor: int,
+        cast_plan: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if segment_plan:
+            segment = segment_plan[min(segment_cursor, len(segment_plan) - 1)]
+            performer_candidate = segment.get("performer")
+            if isinstance(performer_candidate, dict):
+                return performer_candidate
+        return cast_plan[0] if cast_plan else {"heritage": "english", "gender": "female", "role": "lead_vocal_performer"}
+
+    def _load_face_cascade(self) -> cv2.CascadeClassifier | None:
+        if hasattr(self, "_cached_face_cascade"):
+            cached = getattr(self, "_cached_face_cascade")
+            return cached if isinstance(cached, cv2.CascadeClassifier) else None
+
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        if not cascade_path.exists():
+            setattr(self, "_cached_face_cascade", None)
+            return None
+
+        cascade = cv2.CascadeClassifier(str(cascade_path))
+        if cascade.empty():
+            setattr(self, "_cached_face_cascade", None)
+            return None
+
+        setattr(self, "_cached_face_cascade", cascade)
+        return cascade
+
+    def _normalize_face_boxes(self, detections: Any, width: int, height: int) -> list[tuple[int, int, int, int]]:
+        boxes: list[tuple[int, int, int, int]] = []
+        for detection in detections:
+            x, y, w, h = (int(detection[0]), int(detection[1]), int(detection[2]), int(detection[3]))
+            if w * h < 2200:
+                continue
+            expand_w = int(w * 0.28)
+            expand_h = int(h * 0.42)
+            nx = max(x - (expand_w // 2), 0)
+            ny = max(y - int(h * 0.34), 0)
+            nw = min(w + expand_w, width - nx)
+            nh = min(h + expand_h, height - ny)
+            if nw < 28 or nh < 28:
+                continue
+            boxes.append((nx, ny, nw, nh))
+
+        boxes.sort(key=lambda item: item[2] * item[3], reverse=True)
+        return boxes[:4]
+
+    def _fallback_face_boxes(self, width: int, height: int, performer: dict[str, Any]) -> list[tuple[int, int, int, int]]:
+        role = str(performer.get("role") or "dance_performer")
+        if role == "lead_vocal_performer":
+            return [(int(width * 0.31), int(height * 0.07), int(width * 0.38), int(height * 0.46))]
+        return [
+            (int(width * 0.10), int(height * 0.10), int(width * 0.28), int(height * 0.36)),
+            (int(width * 0.62), int(height * 0.10), int(width * 0.28), int(height * 0.36)),
+        ]
+
+    def _apply_fictitious_actor_faces(
+        self,
+        frame: np.ndarray,
+        face_boxes: list[tuple[int, int, int, int]],
+        performer: dict[str, Any],
+        frame_index: int,
+    ) -> np.ndarray:
+        output = frame.copy()
+        performer_seed = self._performer_seed(performer)
+        for box_index, (x, y, w, h) in enumerate(face_boxes):
+            if w <= 1 or h <= 1:
+                continue
+            x2 = min(x + w, output.shape[1])
+            y2 = min(y + h, output.shape[0])
+            if x2 <= x or y2 <= y:
+                continue
+
+            patch_width = x2 - x
+            patch_height = y2 - y
+            seed = performer_seed + (box_index * 101) + (frame_index // 7)
+            patch, mask, blend_strength = self._build_fictitious_face_patch(performer, patch_width, patch_height, seed)
+            roi = output[y:y2, x:x2]
+            alpha = (mask.astype(np.float32) / 255.0) * blend_strength
+            alpha_3 = np.repeat(alpha[:, :, None], 3, axis=2)
+            blended = (roi.astype(np.float32) * (1.0 - alpha_3)) + (patch.astype(np.float32) * alpha_3)
+            blended_u8 = np.clip(blended, 0, 255).astype(np.uint8)
+            sharpened = cv2.addWeighted(
+                blended_u8,
+                1.25,
+                cv2.GaussianBlur(blended_u8, (0, 0), 1.0),
+                -0.25,
+                0,
+            )
+            output[y:y2, x:x2] = sharpened
+        return output
+
+    def _build_fictitious_face_patch(
+        self,
+        performer: dict[str, Any],
+        width: int,
+        height: int,
+        seed: int,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        rng = random.Random(seed)
+        style = self._fictitious_face_style(performer, rng)
+
+        patch = np.zeros((height, width, 3), dtype=np.uint8)
+        patch[:, :] = style["background"]
+
+        face_center = (width // 2, int(height * 0.58))
+        face_axes = (max(8, int(width * 0.34)), max(10, int(height * 0.40)))
+        hair_center = (width // 2, int(height * 0.30))
+        hair_axes = (max(10, int(width * 0.40)), max(8, int(height * 0.30)))
+
+        cv2.ellipse(patch, hair_center, hair_axes, 0, 0, 360, style["hair"], -1)
+        cv2.ellipse(patch, face_center, face_axes, 0, 0, 360, style["skin"], -1)
+
+        eye_y = int(height * 0.52)
+        eye_dx = int(width * 0.12)
+        eye_radius = max(2, int(min(width, height) * 0.045))
+        left_eye = (width // 2 - eye_dx, eye_y)
+        right_eye = (width // 2 + eye_dx, eye_y)
+        cv2.circle(patch, left_eye, eye_radius, (245, 245, 245), -1)
+        cv2.circle(patch, right_eye, eye_radius, (245, 245, 245), -1)
+        cv2.circle(patch, left_eye, max(1, int(eye_radius * 0.55)), style["iris"], -1)
+        cv2.circle(patch, right_eye, max(1, int(eye_radius * 0.55)), style["iris"], -1)
+        cv2.circle(patch, left_eye, max(1, int(eye_radius * 0.25)), (15, 15, 15), -1)
+        cv2.circle(patch, right_eye, max(1, int(eye_radius * 0.25)), (15, 15, 15), -1)
+
+        brow_y = max(0, eye_y - int(eye_radius * 1.6))
+        cv2.line(
+            patch,
+            (left_eye[0] - eye_radius, brow_y),
+            (left_eye[0] + eye_radius, brow_y - 1),
+            style["brow"],
+            max(1, eye_radius // 2),
+        )
+        cv2.line(
+            patch,
+            (right_eye[0] - eye_radius, brow_y - 1),
+            (right_eye[0] + eye_radius, brow_y),
+            style["brow"],
+            max(1, eye_radius // 2),
+        )
+
+        nose_tip = (width // 2, int(height * 0.63))
+        cv2.line(patch, (width // 2, eye_y + eye_radius), nose_tip, style["nose"], max(1, eye_radius // 3))
+        lip_center = (width // 2, int(height * 0.72))
+        lip_axes = (max(4, int(width * 0.09)), max(2, int(height * 0.018)))
+        cv2.ellipse(patch, lip_center, lip_axes, 0, 0, 360, style["lip"], -1)
+
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.ellipse(
+            mask,
+            (width // 2, int(height * 0.56)),
+            (max(8, int(width * 0.37)), max(10, int(height * 0.44))),
+            0,
+            0,
+            360,
+            255,
+            -1,
+        )
+        mask = cv2.GaussianBlur(mask, (0, 0), max(1.5, min(width, height) * 0.03))
+        blend_strength = float(style["blend_strength"])
+        return patch, mask, self._clamp(blend_strength, 0.74, 0.94)
+
+    def _fictitious_face_style(self, performer: dict[str, Any], rng: random.Random) -> dict[str, Any]:
+        heritage = str(performer.get("heritage") or "english")
+        gender = str(performer.get("gender") or "female")
+
+        if heritage == "english":
+            skin = (188, 205, 233) if gender == "female" else (176, 194, 224)
+            hair = (72, 168, 224) if gender == "female" or rng.random() < 0.56 else (58, 90, 142)
+            iris = (215, 162, 58)
+            lip = (166, 94, 184) if gender == "female" else (126, 94, 158)
+            blend_strength = 0.90 if gender == "female" else 0.88
+        elif heritage == "hindi":
+            skin = (116, 152, 198) if gender == "female" else (104, 140, 186)
+            hair = (42, 52, 72)
+            iris = (78, 102, 142)
+            lip = (124, 76, 162) if gender == "female" else (108, 80, 138)
+            blend_strength = 0.87
+        else:
+            skin = (130, 164, 206) if gender == "female" else (118, 152, 194)
+            hair = (48, 62, 86)
+            iris = (90, 112, 144)
+            lip = (138, 82, 168) if gender == "female" else (112, 86, 142)
+            blend_strength = 0.86
+
+        jitter = rng.randint(-8, 8)
+        background = (
+            int(self._clamp(skin[0] - 26 + jitter, 0, 255)),
+            int(self._clamp(skin[1] - 18 + jitter, 0, 255)),
+            int(self._clamp(skin[2] - 12 + jitter, 0, 255)),
+        )
+        brow = tuple(int(self._clamp(channel - 34, 0, 255)) for channel in hair)
+        nose = tuple(int(self._clamp(channel - 12, 0, 255)) for channel in skin)
+        return {
+            "background": background,
+            "skin": skin,
+            "hair": hair,
+            "iris": iris,
+            "lip": lip,
+            "brow": brow,
+            "nose": nose,
+            "blend_strength": blend_strength,
+        }
+
+    def _performer_seed(self, performer: dict[str, Any]) -> int:
+        seed_source = "|".join(
+            [
+                str(performer.get("character_id") or ""),
+                str(performer.get("name") or ""),
+                str(performer.get("heritage") or ""),
+                str(performer.get("gender") or ""),
+            ]
+        )
+        seed = 0
+        for index, char in enumerate(seed_source):
+            seed += (index + 1) * ord(char)
+        return seed or 1931
+
+    def _safe_unlink(self, file_path: Path) -> None:
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except Exception:
+            pass
 
     def _run_ffmpeg_with_progress(
         self,

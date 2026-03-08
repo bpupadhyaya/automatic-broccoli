@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 from threading import Thread
 from typing import Any
 
@@ -309,6 +310,38 @@ def list_quick_convert_downloads(db: Session = Depends(get_db)) -> list[QuickDow
 @router.get("/{project_id}", response_model=ProjectDetail)
 def get_project(project_id: int, db: Session = Depends(get_db)) -> Project:
     return get_project_or_404(project_id, db)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_200_OK)
+def delete_project(project_id: int, db: Session = Depends(get_db)) -> dict[str, bool]:
+    project = get_project_or_404(project_id, db)
+
+    quick_meta: dict[str, Any] = {}
+    config = project.config_json or {}
+    quick_candidate = config.get("quick_conversion")
+    if isinstance(quick_candidate, dict):
+        quick_meta = quick_candidate
+
+    output_dir_raw = quick_meta.get("output_dir")
+    output_dir: Path | None = None
+    if isinstance(output_dir_raw, str) and output_dir_raw.strip():
+        output_dir = Path(output_dir_raw).expanduser()
+
+    db.delete(project)
+    db.commit()
+
+    if output_dir is not None:
+        quick_root = Path(settings.quick_output_root).expanduser().resolve()
+        output_dir_resolved = output_dir.resolve()
+        try:
+            output_dir_resolved.relative_to(quick_root)
+            if output_dir_resolved.exists() and output_dir_resolved.is_dir():
+                shutil.rmtree(output_dir_resolved)
+        except ValueError:
+            # Safety guard: never delete outside configured quick output root.
+            pass
+
+    return {"deleted": True}
 
 
 @router.get("/{project_id}/quick-convert/progress", response_model=QuickConversionProgressResponse)

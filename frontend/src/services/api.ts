@@ -45,6 +45,12 @@ export function listProjects(): Promise<ProjectSummary[]> {
   return request<ProjectSummary[]>("/projects");
 }
 
+export async function deleteProject(projectId: number): Promise<void> {
+  await request<unknown>(`/projects/${projectId}`, {
+    method: "DELETE",
+  });
+}
+
 export function createProject(payload: ProjectCreateInput): Promise<ProjectDetail> {
   return request<ProjectDetail>("/projects", {
     method: "POST",
