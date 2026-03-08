@@ -4,6 +4,8 @@ import DashboardPage from "./pages/DashboardPage";
 import CreateProjectPage from "./pages/CreateProjectPage";
 import ProjectDetailsPage from "./pages/ProjectDetailsPage";
 import QuickConvertPage from "./pages/QuickConvertPage";
+import DownloadsPage from "./pages/DownloadsPage";
+import { ROUTES } from "./routes";
 
 export default function App() {
   return (
@@ -17,10 +19,16 @@ export default function App() {
             <Link to="/" className="rounded-md px-3 py-2 text-slate-700 hover:bg-slate-100">
               Dashboard
             </Link>
-            <Link to="/projects/quick-convert" className="rounded-md border border-brand-300 px-3 py-2 text-brand-700 hover:bg-brand-50">
+            <Link
+              to={ROUTES.quickConvert}
+              className="rounded-md border border-brand-300 px-3 py-2 text-brand-700 hover:bg-brand-50"
+            >
               Quick Convert
             </Link>
-            <Link to="/projects/new" className="rounded-md bg-brand-500 px-3 py-2 text-white hover:bg-brand-700">
+            <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-100">
+              Downloads
+            </Link>
+            <Link to={ROUTES.createProject} className="rounded-md bg-brand-500 px-3 py-2 text-white hover:bg-brand-700">
               Create Project
             </Link>
           </div>
@@ -28,9 +36,10 @@ export default function App() {
       </header>
       <main className="mx-auto w-full max-w-7xl px-6 py-8">
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/projects/quick-convert" element={<QuickConvertPage />} />
-          <Route path="/projects/new" element={<CreateProjectPage />} />
+          <Route path={ROUTES.dashboard} element={<DashboardPage />} />
+          <Route path={ROUTES.quickConvert} element={<QuickConvertPage />} />
+          <Route path={ROUTES.downloads} element={<DownloadsPage />} />
+          <Route path={ROUTES.createProject} element={<CreateProjectPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailsPage />} />
         </Routes>
       </main>

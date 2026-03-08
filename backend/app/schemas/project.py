@@ -159,3 +159,11 @@ class QuickConversionOutputResponse(ORMBaseModel):
     output_dir: str
     download_url: str
     youtube_upload: Optional[dict] = None
+
+
+class QuickDownloadItem(ORMBaseModel):
+    project_id: int
+    video_title: str
+    remix_details: str
+    download_url: str
+    created_at: datetime

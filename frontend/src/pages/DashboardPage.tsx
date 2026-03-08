@@ -31,6 +31,9 @@ export default function DashboardPage() {
             <Link to={ROUTES.quickConvert} className="rounded-md border border-brand-300 px-3 py-2 text-sm font-semibold text-brand-700">
               Quick Convert
             </Link>
+            <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
+              Downloads
+            </Link>
             <Link to={ROUTES.createProject} className="rounded-md bg-brand-500 px-3 py-2 text-sm font-semibold text-white">
               New Project
             </Link>

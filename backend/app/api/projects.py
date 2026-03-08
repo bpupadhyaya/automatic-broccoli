@@ -17,6 +17,7 @@ from app.schemas.project import (
     ProjectDetail,
     ProjectListItem,
     ProjectPlanResponse,
+    QuickDownloadItem,
     QuickConversionOutputResponse,
     QuickProjectCreateRequest,
 )
@@ -52,6 +53,40 @@ def _get_quick_output_meta(project: Project) -> dict:
             detail="Quick conversion output has not been generated yet.",
         )
     return quick
+
+
+def _build_quick_download_item(project: Project, quick_meta: dict) -> QuickDownloadItem | None:
+    output_video_path = quick_meta.get("output_video_path")
+    if not isinstance(output_video_path, str) or not output_video_path.strip():
+        return None
+
+    output_path = Path(output_video_path).expanduser()
+    if not output_path.exists() or not output_path.is_file():
+        return None
+
+    title_candidate = quick_meta.get("youtube_title") or quick_meta.get("download_filename")
+    if isinstance(title_candidate, str) and title_candidate.strip():
+        video_title = title_candidate.strip()
+    else:
+        video_title = f"Project {project.id} Quick Remix"
+
+    remix_profile = str(quick_meta.get("remix_profile") or "unknown").replace("_", " ").title()
+    cast_preset = str(quick_meta.get("cast_preset") or "mixed").replace("_", " ").title()
+    heritage_mode = str(quick_meta.get("heritage_mode") or "preserve").replace("_", " ").title()
+
+    remix_details = (
+        f"{remix_profile} profile | Genre: {project.remix_genre} | "
+        f"Cast: {cast_preset} | Heritage: {heritage_mode}"
+    )
+    download_url = str(quick_meta.get("download_url") or f"{settings.api_prefix}/projects/{project.id}/quick-convert/download")
+
+    return QuickDownloadItem(
+        project_id=project.id,
+        video_title=video_title,
+        remix_details=remix_details,
+        download_url=download_url,
+        created_at=project.created_at,
+    )
 
 
 @router.post("", response_model=ProjectDetail, status_code=status.HTTP_201_CREATED)
@@ -141,6 +176,23 @@ def quick_convert_project(payload: QuickProjectCreateRequest, db: Session = Depe
 @router.get("", response_model=list[ProjectListItem])
 def list_projects(db: Session = Depends(get_db)) -> list[Project]:
     return db.query(Project).order_by(Project.created_at.desc()).all()
+
+
+@router.get("/downloads", response_model=list[QuickDownloadItem])
+def list_quick_convert_downloads(db: Session = Depends(get_db)) -> list[QuickDownloadItem]:
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    downloads: list[QuickDownloadItem] = []
+    for project in projects:
+        config = project.config_json or {}
+        quick_meta = config.get("quick_conversion")
+        if not isinstance(quick_meta, dict):
+            continue
+
+        item = _build_quick_download_item(project, quick_meta)
+        if item is not None:
+            downloads.append(item)
+
+    return downloads
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)

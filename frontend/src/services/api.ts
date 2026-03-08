@@ -3,6 +3,7 @@ import type {
   CharacterGenerateResponse,
   CharacterListResponse,
   CharacterLockResponse,
+  DownloadVideoItem,
   ManifestResponse,
   ProjectCreateInput,
   ProjectDetail,
@@ -13,6 +14,14 @@ import type {
 } from "../types/project";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
+
+function apiBaseForUrlResolution(): string {
+  if (API_BASE_URL.startsWith("http://") || API_BASE_URL.startsWith("https://")) {
+    return API_BASE_URL;
+  }
+  const relativeBase = API_BASE_URL.startsWith("/") ? API_BASE_URL : `/${API_BASE_URL}`;
+  return `${window.location.origin}${relativeBase}`;
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -49,12 +58,24 @@ export function quickConvertProject(payload: QuickProjectCreateInput): Promise<P
   });
 }
 
+export function listDownloadVideos(): Promise<DownloadVideoItem[]> {
+  return request<DownloadVideoItem[]>("/projects/downloads");
+}
+
 export function getQuickConversionOutput(projectId: number): Promise<QuickConversionOutput> {
   return request<QuickConversionOutput>(`/projects/${projectId}/quick-convert/output`);
 }
 
 export function getQuickConversionDownloadUrl(projectId: number): string {
   return `${API_BASE_URL}/projects/${projectId}/quick-convert/download`;
+}
+
+export function resolveDownloadUrl(downloadUrl: string): string {
+  if (downloadUrl.startsWith("http://") || downloadUrl.startsWith("https://")) {
+    return downloadUrl;
+  }
+  const base = apiBaseForUrlResolution();
+  return new URL(downloadUrl, base).toString();
 }
 
 export function getProject(projectId: number): Promise<ProjectDetail> {

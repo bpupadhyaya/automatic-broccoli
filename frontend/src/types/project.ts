@@ -144,3 +144,11 @@ export interface QuickConversionOutput {
   download_url: string;
   youtube_upload?: Record<string, unknown> | null;
 }
+
+export interface DownloadVideoItem {
+  project_id: number;
+  video_title: string;
+  remix_details: string;
+  download_url: string;
+  created_at: string;
+}
