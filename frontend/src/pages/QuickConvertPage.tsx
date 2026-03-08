@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 
 import PageCard from "../components/PageCard";
 import { ROUTES } from "../routes";
-import { quickConvertProject } from "../services/api";
-import type { QuickProjectCreateInput } from "../types/project";
+import { getQuickConversionProgress, quickConvertProject } from "../services/api";
+import type { QuickConversionProgress, QuickProjectCreateInput } from "../types/project";
 
 const initialState: QuickProjectCreateInput = {
   target_original_video_url: "",
@@ -22,10 +22,47 @@ const initialState: QuickProjectCreateInput = {
   youtube_privacy_status: "private",
 };
 
+function mapBackendStageToStepIndex(stage: string | null | undefined, stepCount: number): number {
+  const normalized = (stage ?? "").toLowerCase();
+  if (!normalized) {
+    return 0;
+  }
+  if (normalized.includes("queued") || normalized.includes("initialize") || normalized.includes("plan generation")) {
+    return 0;
+  }
+  if (normalized.includes("download")) {
+    return Math.min(stepCount - 1, 1);
+  }
+  if (normalized.includes("analyze") || normalized.includes("learn transformation")) {
+    return Math.min(stepCount - 1, 2);
+  }
+  if (normalized.includes("cast synthesis") || normalized.includes("segment planning")) {
+    return Math.min(stepCount - 1, 3);
+  }
+  if (normalized.includes("render segments")) {
+    return Math.min(stepCount - 1, 4);
+  }
+  if (normalized.includes("compose output") || normalized.includes("finalize")) {
+    return Math.min(stepCount - 1, 5);
+  }
+  if (normalized.includes("upload")) {
+    return Math.min(stepCount - 1, 6);
+  }
+  if (normalized.includes("completed")) {
+    return Math.max(stepCount - 1, 0);
+  }
+  return 0;
+}
+
 export default function QuickConvertPage() {
   const [form, setForm] = useState<QuickProjectCreateInput>(initialState);
   const [submitting, setSubmitting] = useState(false);
   const [activeConversionStep, setActiveConversionStep] = useState(0);
+  const [activityFeed, setActivityFeed] = useState<string[]>([]);
+  const [conversionProjectId, setConversionProjectId] = useState<number | null>(null);
+  const [backendProgressRatio, setBackendProgressRatio] = useState(0);
+  const [backendStage, setBackendStage] = useState<string | null>(null);
+  const [backendExecution, setBackendExecution] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -37,44 +74,82 @@ export default function QuickConvertPage() {
 
   const conversionSteps = useMemo(() => {
     const steps = [
-      "Validate and normalize submitted URLs.",
-      "Create project with profile defaults and conversion metadata.",
+      "Queue conversion job and initialize processing context.",
+      "Download source videos from YouTube.",
+      "Analyze target and learn transformations from example pair.",
+      "Synthesize fictitious cast and build remix segment plan.",
+      "Render transformed non-linear segments (visual + voice).",
+      "Compose output, finalize status, and prepare download artifact.",
     ];
-
-    if (form.auto_generate_plan) {
-      steps.push("Generate remix planning assets and manifest.");
-    }
-
-    if (form.run_end_to_end) {
-      steps.push("Download source videos from YouTube.");
-      steps.push("Extract timed clips and build the remix timeline.");
-      steps.push("Render final MP4 output to the configured local folder.");
-    }
 
     if (form.allow_youtube_upload) {
       steps.push("Upload remixed output to YouTube with selected privacy.");
     }
 
-    steps.push("Finalize project status and expose download URL.");
     return steps;
-  }, [form.auto_generate_plan, form.run_end_to_end, form.allow_youtube_upload]);
+  }, [form.allow_youtube_upload]);
 
   useEffect(() => {
-    if (!submitting) {
+    if (!submitting || conversionProjectId == null) {
       return;
     }
+    let cancelled = false;
 
-    setActiveConversionStep(0);
-    const timer = window.setInterval(() => {
-      setActiveConversionStep((current) => Math.min(current + 1, conversionSteps.length - 1));
-    }, 2200);
+    const syncProgress = (progressPayload: QuickConversionProgress) => {
+      if (cancelled) {
+        return;
+      }
+      setBackendExecution(progressPayload.execution);
+      setBackendProgressRatio(progressPayload.progress ?? 0);
+      setBackendStage(progressPayload.current_stage ?? null);
+      setActiveConversionStep(
+        mapBackendStageToStepIndex(progressPayload.current_stage, conversionSteps.length)
+      );
 
-    return () => window.clearInterval(timer);
-  }, [submitting, conversionSteps.length]);
+      const messages = progressPayload.processing_steps.map((step) => `${step.stage}: ${step.detail}`);
+      setActivityFeed(messages.slice(-24));
+
+      if (progressPayload.execution === "completed") {
+        setActiveConversionStep(conversionSteps.length - 1);
+        setSubmitting(false);
+        navigate(ROUTES.projectDetails(progressPayload.project_id));
+        return;
+      }
+      if (progressPayload.execution === "failed") {
+        setSubmitting(false);
+        setError(progressPayload.execution_error ?? "Quick conversion failed");
+      }
+    };
+
+    const pollProgress = async () => {
+      try {
+        const progressPayload = await getQuickConversionProgress(conversionProjectId);
+        syncProgress(progressPayload);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        setSubmitting(false);
+        setError(err instanceof Error ? err.message : "Unable to fetch live conversion progress");
+      }
+    };
+
+    pollProgress();
+    const timer = window.setInterval(pollProgress, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [submitting, conversionProjectId, conversionSteps.length, navigate]);
 
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setActiveConversionStep(0);
+    setActivityFeed([]);
+    setConversionProjectId(null);
+    setBackendProgressRatio(0);
+    setBackendStage(null);
+    setBackendExecution(null);
     setSubmitting(true);
     setError(null);
     try {
@@ -85,10 +160,18 @@ export default function QuickConvertPage() {
         youtube_description: form.youtube_description?.trim() || undefined,
       };
       const project = await quickConvertProject(payload);
-      navigate(ROUTES.projectDetails(project.id));
+      if (!payload.run_end_to_end) {
+        setSubmitting(false);
+        navigate(ROUTES.projectDetails(project.id));
+        return;
+      }
+      setConversionProjectId(project.id);
+      setBackendExecution("queued");
+      setBackendStage("Queued");
+      setBackendProgressRatio(0.01);
+      setActivityFeed(["Queued: Quick conversion request accepted. Waiting for backend worker updates."]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Quick conversion failed");
-    } finally {
       setSubmitting(false);
     }
   };
@@ -275,7 +358,22 @@ export default function QuickConvertPage() {
             {submitting && (
               <div className="rounded-md border border-brand-200 bg-brand-50 p-3">
                 <p className="text-sm font-semibold text-brand-800">Conversion Steps</p>
-                <p className="mt-1 text-xs text-brand-700">Detailed progress shown while conversion is running.</p>
+                <p className="mt-1 text-xs text-brand-700">
+                  Live backend progress from the conversion worker.
+                </p>
+                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-800 md:grid-cols-3">
+                  <p>
+                    <span className="font-semibold">Project:</span>{" "}
+                    {conversionProjectId ? `#${conversionProjectId}` : "starting..."}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Stage:</span> {backendStage ?? "Queued"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Progress:</span>{" "}
+                    {(backendProgressRatio * 100).toFixed(1)}% ({backendExecution ?? "queued"})
+                  </p>
+                </div>
                 <ol className="mt-3 space-y-2 text-xs">
                   {conversionSteps.map((step, index) => {
                     const isDone = index < activeConversionStep;
@@ -298,6 +396,25 @@ export default function QuickConvertPage() {
                     );
                   })}
                 </ol>
+
+                <div className="mt-4 rounded-md border border-brand-100 bg-white/80 p-3">
+                  <p className="text-xs font-semibold text-brand-800">Fine-Grained Remix Activity</p>
+                  <ul className="mt-2 space-y-1.5 text-xs text-slate-700">
+                    {activityFeed.map((message, index) => {
+                      const isLatest = index === activityFeed.length - 1;
+                      return (
+                        <li key={`${index}-${message}`} className="flex items-start gap-2">
+                          <span className={`mt-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full text-[9px] font-semibold ${
+                            isLatest ? "bg-brand-200 text-brand-800" : "bg-emerald-100 text-emerald-700"
+                          }`}>
+                            {isLatest ? "..." : "OK"}
+                          </span>
+                          <span className={isLatest ? "font-semibold text-brand-900" : "text-slate-700"}>{message}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               </div>
             )}
           </div>

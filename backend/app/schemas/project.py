@@ -161,6 +161,26 @@ class QuickConversionOutputResponse(ORMBaseModel):
     youtube_upload: Optional[dict] = None
 
 
+class QuickProcessingStep(ORMBaseModel):
+    timestamp: str
+    stage: str
+    detail: str
+    progress: float = Field(ge=0.0, le=1.0)
+
+
+class QuickConversionProgressResponse(ORMBaseModel):
+    project_id: int
+    status: str
+    execution: str
+    progress: float = Field(ge=0.0, le=1.0)
+    current_stage: Optional[str] = None
+    processing_steps: list[QuickProcessingStep] = Field(default_factory=list)
+    output_video_path: Optional[str] = None
+    download_url: Optional[str] = None
+    execution_error: Optional[str] = None
+    youtube_upload: Optional[dict] = None
+
+
 class QuickDownloadItem(ORMBaseModel):
     project_id: int
     video_title: str

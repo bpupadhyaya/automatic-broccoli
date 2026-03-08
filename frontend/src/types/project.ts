@@ -145,6 +145,26 @@ export interface QuickConversionOutput {
   youtube_upload?: Record<string, unknown> | null;
 }
 
+export interface QuickProcessingStep {
+  timestamp: string;
+  stage: string;
+  detail: string;
+  progress: number;
+}
+
+export interface QuickConversionProgress {
+  project_id: number;
+  status: string;
+  execution: string;
+  progress: number;
+  current_stage?: string | null;
+  processing_steps: QuickProcessingStep[];
+  output_video_path?: string | null;
+  download_url?: string | null;
+  execution_error?: string | null;
+  youtube_upload?: Record<string, unknown> | null;
+}
+
 export interface DownloadVideoItem {
   project_id: number;
   video_title: string;

@@ -9,6 +9,7 @@ import type {
   ProjectDetail,
   ProjectPlan,
   ProjectSummary,
+  QuickConversionProgress,
   QuickConversionOutput,
   QuickProjectCreateInput,
 } from "../types/project";
@@ -64,6 +65,10 @@ export function listDownloadVideos(): Promise<DownloadVideoItem[]> {
 
 export function getQuickConversionOutput(projectId: number): Promise<QuickConversionOutput> {
   return request<QuickConversionOutput>(`/projects/${projectId}/quick-convert/output`);
+}
+
+export function getQuickConversionProgress(projectId: number): Promise<QuickConversionProgress> {
+  return request<QuickConversionProgress>(`/projects/${projectId}/quick-convert/progress`);
 }
 
 export function getQuickConversionDownloadUrl(projectId: number): string {
