@@ -130,52 +130,22 @@ class LocalQuickRemixService:
             0.62,
             callback=progress_callback,
         )
-        segment_paths = self._render_target_segments(
+        output_video_path = output_dir / f"project_{project.id}_quick_remix.mp4"
+        self._render_full_length_remix(
             target_video=target_video,
-            clips_dir=clips_dir,
+            output_video_path=output_video_path,
             transformation_profile=transformation_profile,
+            cast_plan=cast_plan,
             segment_plan=segment_plan,
             processing_steps=processing_steps,
             progress_callback=progress_callback,
         )
-
-        concat_list = clips_dir / "concat_list.txt"
-        concat_list.write_text("\n".join([f"file '{path.as_posix()}'" for path in segment_paths]), encoding="utf-8")
-
         self._append_processing_step(
             processing_steps,
             "Compose Output",
-            "Concatenating transformed segments into final remix export.",
-            0.92,
+            "Packaging full-length transformed stream into final remix export.",
+            0.95,
             callback=progress_callback,
-        )
-        output_video_path = output_dir / f"project_{project.id}_quick_remix.mp4"
-        self._run_command(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "21",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-                "-movflags",
-                "+faststart",
-                str(output_video_path),
-            ]
         )
         self._append_processing_step(
             processing_steps,
@@ -195,6 +165,7 @@ class LocalQuickRemixService:
                 "example_remix": str(example_remix.resolve()),
             },
             "processing_mode": "example_learned_transform",
+            "render_strategy": "full_length_continuous_actor_transform",
             "transformation_profile": transformation_profile,
             "cast_plan": cast_plan,
             "segment_plan": segment_plan,
@@ -546,59 +517,259 @@ class LocalQuickRemixService:
     ) -> list[dict[str, Any]]:
         duration = max(target_duration, 30.0)
         interval = float(transformation_profile.get("target_shot_interval_sec", 2.8))
-        example_remix_duration = float(transformation_profile.get("example_remix_duration_sec", duration * 0.35))
-        remix_duration = self._clamp(min(duration, example_remix_duration * 1.18), 75.0, min(duration, 300.0))
-        shot_count = int(remix_duration / max(interval, 1.4))
-        shot_count = self._clamp_int(shot_count, 24, 84)
+        segment_duration_target = self._clamp(interval * 2.35, 4.2, 11.5)
+        shot_count = int(duration / max(segment_duration_target, 1.0))
+        shot_count = self._clamp_int(shot_count, 18, 180)
 
         rng = random.Random(project_id * 6131)
         base_tempo = float(transformation_profile.get("tempo_multiplier", 1.0))
-        max_source_start = max(duration - 1.2, 1.2)
-        source_cursor = rng.uniform(0.0, max_source_start * 0.25)
-        direction = 1.0
-        output_cursor = 0.0
-
+        cursor = 0.0
         segments: list[dict[str, Any]] = []
+
         for idx in range(shot_count):
-            source_duration = self._clamp(interval + rng.uniform(-0.55, 0.85), 1.25, 4.8)
-            tempo_multiplier = self._clamp(base_tempo + rng.uniform(-0.12, 0.11), 0.84, 1.22)
-            output_duration = self._clamp(source_duration / tempo_multiplier, 1.05, 5.2)
-
-            jump_span = self._clamp(source_duration * rng.uniform(2.0, 6.2), 3.0, 28.0)
-            if idx % 5 == 0:
-                direction *= -1.0
-            source_cursor += jump_span * direction
-            if source_cursor < 0.5 or source_cursor >= max_source_start:
-                source_cursor = rng.uniform(0.0, max_source_start)
-                direction *= -1.0
-
-            pulse_offset = ((idx % 7) - 3) * 0.37
-            source_start = self._clamp(source_cursor + pulse_offset, 0.0, max(duration - source_duration, 0.0))
+            remaining = duration - cursor
+            if idx == shot_count - 1 or remaining <= 0.4:
+                source_duration = max(remaining, 0.35)
+            else:
+                raw = segment_duration_target + rng.uniform(-0.8, 0.9)
+                source_duration = self._clamp(raw, 3.0, min(12.0, remaining))
 
             performer = cast_plan[idx % len(cast_plan)] if cast_plan else None
             effect_mode = "normal"
-            if idx % 9 == 4:
-                effect_mode = "jumpcut"
-            elif idx % 7 == 3:
-                effect_mode = "mirror"
-            elif idx % 6 == 2:
+            if idx % 11 == 5:
                 effect_mode = "stutter"
+            elif idx % 9 == 4:
+                effect_mode = "mirror"
 
             segments.append(
                 {
                     "segment_id": f"seg_{idx + 1:03d}",
-                    "source_start_sec": round(source_start, 3),
+                    "source_start_sec": round(cursor, 3),
                     "source_duration_sec": round(source_duration, 3),
-                    "output_start_sec": round(output_cursor, 3),
-                    "output_duration_sec": round(output_duration, 3),
-                    "tempo_multiplier": round(tempo_multiplier, 3),
+                    "output_start_sec": round(cursor, 3),
+                    "output_duration_sec": round(source_duration, 3),
+                    "tempo_multiplier": round(self._clamp(base_tempo + rng.uniform(-0.06, 0.06), 0.9, 1.1), 3),
                     "effect_mode": effect_mode,
                     "performer": performer,
                 }
             )
-            output_cursor += output_duration
+            cursor += source_duration
+            if cursor >= duration:
+                break
+
+        if segments:
+            last = segments[-1]
+            correction = round(max(duration - float(last["source_start_sec"]), 0.35), 3)
+            last["source_duration_sec"] = correction
+            last["output_duration_sec"] = correction
 
         return segments
+
+    def _render_full_length_remix(
+        self,
+        target_video: Path,
+        output_video_path: Path,
+        transformation_profile: dict[str, float | str],
+        cast_plan: list[dict[str, Any]],
+        segment_plan: list[dict[str, Any]],
+        processing_steps: list[dict[str, Any]],
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        video_probe = self._probe_video(target_video)
+        duration_sec = max(float(video_probe.get("duration_sec") or 0.0), 1.0)
+        style_profile = self._build_actor_transform_blueprint(transformation_profile, cast_plan, segment_plan)
+        video_filter = self._build_full_length_video_filter(style_profile)
+        audio_filter = self._build_full_length_audio_filter(style_profile)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(target_video),
+            "-filter_complex",
+            f"{video_filter};{audio_filter}",
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            "-progress",
+            "pipe:2",
+            "-nostats",
+            str(output_video_path),
+        ]
+
+        self._run_ffmpeg_with_progress(
+            command=command,
+            duration_sec=duration_sec,
+            processing_steps=processing_steps,
+            progress_callback=progress_callback,
+            progress_start=0.62,
+            progress_end=0.92,
+            stage="Render Segments",
+            detail_prefix="Applying full-length fictitious actor and voice transformation",
+        )
+
+    def _build_actor_transform_blueprint(
+        self,
+        transformation_profile: dict[str, float | str],
+        cast_plan: list[dict[str, Any]],
+        segment_plan: list[dict[str, Any]],
+    ) -> dict[str, float | str]:
+        lead = next((member for member in cast_plan if member.get("role") == "lead_vocal_performer"), None)
+        lead_gender = str((lead or {}).get("gender") or "female")
+        lead_heritage = str((lead or {}).get("heritage") or "english")
+        style_curve = "increase_contrast" if lead_gender == "female" else "medium_contrast"
+
+        base_brightness = float(transformation_profile.get("brightness_shift", 0.02))
+        base_contrast = float(transformation_profile.get("contrast_gain", 1.1))
+        base_saturation = float(transformation_profile.get("saturation_gain", 1.15))
+        base_hue = float(transformation_profile.get("hue_shift", 0.0))
+
+        heritage_offset = {"english": 4.0, "nepali": 10.0, "hindi": 14.0}
+        lead_offset = heritage_offset.get(lead_heritage, 8.0)
+        mask_intensity = 26.0 if lead_gender == "female" else 24.0
+        variation_strength = self._clamp(0.9 + (len(segment_plan) / 180.0), 0.95, 1.4)
+
+        pitch_factor = 1.13 if lead_gender == "female" else 0.9
+        if lead_heritage == "hindi":
+            pitch_factor += 0.03
+        elif lead_heritage == "nepali":
+            pitch_factor += 0.01
+
+        return {
+            "brightness": self._clamp(base_brightness + 0.02, -0.2, 0.22),
+            "contrast": self._clamp(base_contrast * 1.18, 0.95, 1.85),
+            "saturation": self._clamp(base_saturation * 1.28, 0.95, 2.2),
+            "gamma": 1.02 if lead_gender == "female" else 0.98,
+            "base_hue": self._clamp(base_hue + lead_offset, -30.0, 30.0),
+            "hue_amp": self._clamp(8.0 * variation_strength, 4.0, 13.0),
+            "hue_saturation": self._clamp(1.08 + (0.08 * variation_strength), 1.02, 1.24),
+            "curve_preset": style_curve,
+            "blur_sigma": 0.22 if lead_gender == "female" else 0.18,
+            "noise_level": self._clamp(mask_intensity * 0.24, 3.5, 7.0),
+            "mask_pixel_size": self._clamp(mask_intensity, 22.0, 36.0),
+            "pitch_factor": self._clamp(pitch_factor, 0.84, 1.22),
+            "bass_gain": 1.8 if lead_gender == "male" else -1.0,
+            "presence_gain": 2.9 if lead_gender == "female" else 1.9,
+            "echo_delay": 60.0 if lead_gender == "female" else 72.0,
+            "echo_decay": 0.19 if lead_gender == "female" else 0.17,
+            "volume": 1.08 if lead_gender == "female" else 1.03,
+        }
+
+    def _build_full_length_video_filter(self, style: dict[str, float | str]) -> str:
+        pixel_size = int(round(float(style["mask_pixel_size"])))
+        side_pixel = max(16, pixel_size - 4)
+        base_hue = float(style["base_hue"])
+        hue_amp = float(style["hue_amp"])
+        return (
+            "[0:v]"
+            "scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2,"
+            f"eq=brightness={float(style['brightness']):.4f}:"
+            f"contrast={float(style['contrast']):.4f}:"
+            f"saturation={float(style['saturation']):.4f}:"
+            f"gamma={float(style['gamma']):.4f},"
+            f"hue=h={base_hue:.3f}+{hue_amp:.3f}*sin(t*0.65):s={float(style['hue_saturation']):.4f},"
+            f"curves=preset={style['curve_preset']},"
+            f"gblur=sigma={float(style['blur_sigma']):.3f},"
+            f"noise=alls={float(style['noise_level']):.3f}:allf=t,"
+            "split=4[base][r1][r2][r3];"
+            "[r1]crop=w=iw*0.42:h=ih*0.34:x=iw*0.29:y=ih*0.05,"
+            f"pixelize=w={pixel_size}:h={pixel_size},"
+            "eq=contrast=1.35:saturation=1.55,hue=h=20:s=1.20[r1m];"
+            "[r2]crop=w=iw*0.28:h=ih*0.30:x=iw*0.05:y=ih*0.09,"
+            f"pixelize=w={side_pixel}:h={side_pixel},"
+            "eq=contrast=1.25:saturation=1.45,hue=h=-14:s=1.12[r2m];"
+            "[r3]crop=w=iw*0.28:h=ih*0.30:x=iw*0.67:y=ih*0.09,"
+            f"pixelize=w={side_pixel}:h={side_pixel},"
+            "eq=contrast=1.25:saturation=1.45,hue=h=14:s=1.12[r3m];"
+            "[base][r1m]overlay=x=main_w*0.29+12*sin(t*1.7):y=main_h*0.05+7*cos(t*1.4)[m1];"
+            "[m1][r2m]overlay=x=main_w*0.05+9*sin(t*1.1):y=main_h*0.09+6*cos(t*1.3)[m2];"
+            "[m2][r3m]overlay=x=main_w*0.67+9*cos(t*1.2):y=main_h*0.09+6*sin(t*1.0),"
+            "unsharp=7:7:0.72:5:5:0.00,format=yuv420p[vout]"
+        )
+
+    def _build_full_length_audio_filter(self, style: dict[str, float | str]) -> str:
+        pitch = float(style["pitch_factor"])
+        return (
+            "[0:a]"
+            f"rubberband=pitch={pitch:.4f}:tempo=1.0:transients=smooth:detector=compound:"
+            "phase=laminar:window=short:formant=preserved:pitchq=consistency,"
+            f"equalizer=f=180:t=q:w=0.9:g={float(style['bass_gain']):.3f},"
+            f"equalizer=f=2600:t=q:w=1.2:g={float(style['presence_gain']):.3f},"
+            "highpass=f=70,lowpass=f=14500,"
+            f"aecho=0.82:0.88:{int(float(style['echo_delay']))}:{float(style['echo_decay']):.3f},"
+            f"volume={float(style['volume']):.4f}[aout]"
+        )
+
+    def _run_ffmpeg_with_progress(
+        self,
+        command: list[str],
+        duration_sec: float,
+        processing_steps: list[dict[str, Any]],
+        progress_callback: Callable[[dict[str, Any]], None] | None,
+        progress_start: float,
+        progress_end: float,
+        stage: str,
+        detail_prefix: str,
+    ) -> None:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        stderr_lines: list[str] = []
+        last_emitted_progress = progress_start
+
+        while True:
+            line = process.stderr.readline() if process.stderr is not None else ""
+            if not line:
+                if process.poll() is not None:
+                    break
+                continue
+
+            stripped = line.strip()
+            if stripped:
+                stderr_lines.append(stripped)
+                if len(stderr_lines) > 220:
+                    stderr_lines = stderr_lines[-220:]
+
+            if stripped.startswith("out_time_ms="):
+                try:
+                    out_ms = int(stripped.split("=", 1)[1])
+                except ValueError:
+                    continue
+                seconds = max(out_ms / 1_000_000.0, 0.0)
+                ratio = self._clamp(seconds / max(duration_sec, 0.1), 0.0, 1.0)
+                mapped = self._clamp(
+                    progress_start + (progress_end - progress_start) * ratio,
+                    progress_start,
+                    progress_end,
+                )
+                if mapped - last_emitted_progress >= 0.012 or ratio >= 0.998:
+                    self._append_processing_step(
+                        processing_steps,
+                        stage,
+                        f"{detail_prefix} ({int(ratio * 100)}%)",
+                        mapped,
+                        callback=progress_callback,
+                    )
+                    last_emitted_progress = mapped
+
+        return_code = process.wait()
+        if return_code != 0:
+            detail = "\n".join(stderr_lines[-22:]).strip()
+            raise RuntimeError(f"Command failed: {' '.join(command)}\n{detail}")
 
     def _render_target_segments(
         self,

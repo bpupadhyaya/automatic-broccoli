@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -218,7 +219,6 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)) -> Pro
 @router.post("/quick-convert", response_model=ProjectDetail, status_code=status.HTTP_201_CREATED)
 def quick_convert_project(
     payload: QuickProjectCreateRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> Project:
     project_payload = build_quick_project_payload(
@@ -272,10 +272,15 @@ def quick_convert_project(
         project.status = "processing"
         project.config_json = {**(project.config_json or {}), "quick_conversion": quick_meta}
         flag_modified(project, "config_json")
-        background_tasks.add_task(_run_quick_convert_job, project.id, payload.model_dump(mode="json"))
 
     db.commit()
     db.refresh(project)
+    if payload.run_end_to_end:
+        Thread(
+            target=_run_quick_convert_job,
+            args=(project.id, payload.model_dump(mode="json")),
+            daemon=True,
+        ).start()
     return project
 
 
