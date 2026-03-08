@@ -215,6 +215,7 @@ frontend/vite.config.d.ts
 
 # Local app data
 backend/remix.db
+outputs/
 
 # Marimo
 marimo/_static/

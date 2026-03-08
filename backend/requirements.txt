@@ -6,3 +6,6 @@ psycopg2-binary==2.9.11
 pydantic==2.11.9
 pydantic-settings==2.11.0
 python-dotenv==1.1.1
+yt-dlp
+google-api-python-client
+google-auth

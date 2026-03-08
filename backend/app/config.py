@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     database_url: str = "postgresql://user:password@localhost:5432/remixdb"
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    quick_output_root: str = "/app/outputs"
+    youtube_client_secrets_path: str | None = None
+    youtube_token_path: str | None = None
 
     @field_validator("cors_origins", mode="before")
     @classmethod

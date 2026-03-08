@@ -14,6 +14,12 @@ const initialState: QuickProjectCreateInput = {
   cast_preset: "mixed",
   heritage_mode: "preserve",
   auto_generate_plan: true,
+  run_end_to_end: true,
+  local_output_dir: "",
+  allow_youtube_upload: false,
+  youtube_title: "",
+  youtube_description: "",
+  youtube_privacy_status: "private",
 };
 
 export default function QuickConvertPage() {
@@ -33,7 +39,13 @@ export default function QuickConvertPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const project = await quickConvertProject(form);
+      const payload: QuickProjectCreateInput = {
+        ...form,
+        local_output_dir: form.local_output_dir?.trim() || undefined,
+        youtube_title: form.youtube_title?.trim() || undefined,
+        youtube_description: form.youtube_description?.trim() || undefined,
+      };
+      const project = await quickConvertProject(payload);
       navigate(ROUTES.projectDetails(project.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Quick conversion failed");
@@ -134,11 +146,80 @@ export default function QuickConvertPage() {
             Auto-generate plan immediately
           </label>
 
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.run_end_to_end}
+              onChange={(event) => setForm((prev) => ({ ...prev, run_end_to_end: event.target.checked }))}
+            />
+            Run end-to-end remix and generate local MP4 output
+          </label>
+
+          <label className="space-y-1 text-sm">
+            <span className="font-medium text-slate-700">Local Output Folder (optional)</span>
+            <input
+              type="text"
+              value={form.local_output_dir ?? ""}
+              onChange={(event) => setForm((prev) => ({ ...prev, local_output_dir: event.target.value }))}
+              placeholder="Default: ./outputs/project_{id} (host mapped from backend /app/outputs)"
+              className="w-full rounded-md border border-slate-300 px-3 py-2"
+            />
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.allow_youtube_upload}
+              onChange={(event) => setForm((prev) => ({ ...prev, allow_youtube_upload: event.target.checked }))}
+            />
+            Upload remixed video to YouTube (requires server OAuth credentials)
+          </label>
+
+          {form.allow_youtube_upload && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <label className="space-y-1 text-sm md:col-span-2">
+                <span className="font-medium text-slate-700">YouTube Title (optional)</span>
+                <input
+                  type="text"
+                  value={form.youtube_title ?? ""}
+                  onChange={(event) => setForm((prev) => ({ ...prev, youtube_title: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="font-medium text-slate-700">Privacy</span>
+                <select
+                  value={form.youtube_privacy_status}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      youtube_privacy_status: event.target.value as QuickProjectCreateInput["youtube_privacy_status"],
+                    }))
+                  }
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                >
+                  <option value="private">Private</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-sm md:col-span-3">
+                <span className="font-medium text-slate-700">YouTube Description (optional)</span>
+                <textarea
+                  rows={3}
+                  value={form.youtube_description ?? ""}
+                  onChange={(event) => setForm((prev) => ({ ...prev, youtube_description: event.target.value }))}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2"
+                />
+              </label>
+            </div>
+          )}
+
           <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-700">
             <p className="font-semibold">Default behavior</p>
             <p>English, Nepali, and Hindi profiles use fictional cast defaults with profile-specific styling.</p>
-            <p>Hindi defaults use girls age 18-25 and boys age 18-30.</p>
             <p>Heritage mode lets you preserve, swap, or mix English/Nepali/Hindi performer heritage.</p>
+            <p>If output folder is empty, remixed files are written under the default quick output root.</p>
           </div>
 
           {error && <p className="rounded-md bg-red-50 p-2 text-sm text-red-700">{error}</p>}

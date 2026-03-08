@@ -8,6 +8,7 @@ import type {
   ProjectDetail,
   ProjectPlan,
   ProjectSummary,
+  QuickConversionOutput,
   QuickProjectCreateInput,
 } from "../types/project";
 
@@ -46,6 +47,14 @@ export function quickConvertProject(payload: QuickProjectCreateInput): Promise<P
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getQuickConversionOutput(projectId: number): Promise<QuickConversionOutput> {
+  return request<QuickConversionOutput>(`/projects/${projectId}/quick-convert/output`);
+}
+
+export function getQuickConversionDownloadUrl(projectId: number): string {
+  return `${API_BASE_URL}/projects/${projectId}/quick-convert/download`;
 }
 
 export function getProject(projectId: number): Promise<ProjectDetail> {

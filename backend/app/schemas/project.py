@@ -14,6 +14,7 @@ CelebrityMode = Literal[
 QuickRemixProfile = Literal["english", "nepali", "hindi"]
 QuickCastPreset = Literal["female", "male", "mixed"]
 QuickHeritageMode = Literal["preserve", "swap_to_english", "swap_to_nepali", "swap_to_hindi", "mix"]
+YouTubePrivacyStatus = Literal["private", "unlisted", "public"]
 
 
 class ORMBaseModel(BaseModel):
@@ -55,6 +56,12 @@ class QuickProjectCreateRequest(ORMBaseModel):
     cast_preset: QuickCastPreset = "mixed"
     heritage_mode: QuickHeritageMode = "preserve"
     auto_generate_plan: bool = True
+    run_end_to_end: bool = True
+    local_output_dir: Optional[str] = Field(default=None, max_length=512)
+    allow_youtube_upload: bool = False
+    youtube_title: Optional[str] = Field(default=None, max_length=120)
+    youtube_description: Optional[str] = Field(default=None, max_length=5000)
+    youtube_privacy_status: YouTubePrivacyStatus = "private"
 
 
 class ProjectSummary(ORMBaseModel):
@@ -144,3 +151,11 @@ class RemixProjectRead(ProjectDetail):
 class ManifestResponse(ORMBaseModel):
     project_id: int
     manifest: dict
+
+
+class QuickConversionOutputResponse(ORMBaseModel):
+    project_id: int
+    output_video_path: str
+    output_dir: str
+    download_url: str
+    youtube_upload: Optional[dict] = None

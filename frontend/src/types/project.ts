@@ -54,6 +54,7 @@ export interface ProjectSummary {
 }
 
 export interface ProjectDetail extends ProjectSummary, ProjectCreateInput {
+  config_json: Record<string, unknown> | null;
   transformation_summary: string | null;
   character_bible: CharacterBible | null;
   storyboard_scenes: Scene[] | null;
@@ -118,6 +119,7 @@ export interface ApplyCharacterToShotsResponse {
 export type QuickRemixProfile = "english" | "nepali" | "hindi";
 export type QuickCastPreset = "female" | "male" | "mixed";
 export type QuickHeritageMode = "preserve" | "swap_to_english" | "swap_to_nepali" | "swap_to_hindi" | "mix";
+export type YouTubePrivacyStatus = "private" | "unlisted" | "public";
 
 export interface QuickProjectCreateInput {
   target_original_video_url: string;
@@ -127,4 +129,18 @@ export interface QuickProjectCreateInput {
   cast_preset: QuickCastPreset;
   heritage_mode: QuickHeritageMode;
   auto_generate_plan: boolean;
+  run_end_to_end: boolean;
+  local_output_dir?: string;
+  allow_youtube_upload: boolean;
+  youtube_title?: string;
+  youtube_description?: string;
+  youtube_privacy_status: YouTubePrivacyStatus;
+}
+
+export interface QuickConversionOutput {
+  project_id: number;
+  output_video_path: string;
+  output_dir: string;
+  download_url: string;
+  youtube_upload?: Record<string, unknown> | null;
 }

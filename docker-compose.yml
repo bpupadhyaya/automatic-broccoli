@@ -25,11 +25,14 @@ services:
       API_PREFIX: /api
       DATABASE_URL: postgresql://user:password@db:5432/remixdb
       CORS_ORIGINS: '["http://localhost:5179","http://127.0.0.1:5179"]'
+      QUICK_OUTPUT_ROOT: /app/outputs
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "18082:8000"
+    volumes:
+      - ./outputs:/app/outputs
     restart: unless-stopped
 
   frontend:

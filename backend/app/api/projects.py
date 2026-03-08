@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.deps import get_latest_manifest, get_project_or_404
+from app.config import settings
 from app.database import get_db
 from app.models.project import Project
 from app.schemas.project import (
@@ -12,10 +17,13 @@ from app.schemas.project import (
     ProjectDetail,
     ProjectListItem,
     ProjectPlanResponse,
+    QuickConversionOutputResponse,
     QuickProjectCreateRequest,
 )
+from app.services.local_quick_remixer import LocalQuickRemixService
 from app.services.quick_conversion_defaults import build_quick_project_payload
 from app.services.remix_planner import run_remix_planner
+from app.services.youtube_uploader import YouTubeUploaderService
 
 router = APIRouter()
 
@@ -26,6 +34,24 @@ def _create_project_record(payload: ProjectCreate, db: Session) -> Project:
     project.status = "created"
     project.config_json = payload_dict
     return project
+
+
+def _get_quick_output_meta(project: Project) -> dict:
+    config = project.config_json or {}
+    quick = config.get("quick_conversion")
+    if not isinstance(quick, dict):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Quick conversion output is not available for this project.",
+        )
+    output_video_path = quick.get("output_video_path")
+    output_dir = quick.get("output_dir")
+    if not output_video_path or not output_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Quick conversion output has not been generated yet.",
+        )
+    return quick
 
 
 @router.post("", response_model=ProjectDetail, status_code=status.HTTP_201_CREATED)
@@ -48,16 +74,22 @@ def quick_convert_project(payload: QuickProjectCreateRequest, db: Session = Depe
         heritage_mode=payload.heritage_mode,
     )
     project = _create_project_record(project_payload, db)
-    project.config_json = {
-        **project_payload.model_dump(mode="json"),
-        "quick_conversion": {
-            "enabled": True,
-            "remix_profile": payload.remix_profile,
-            "cast_preset": payload.cast_preset,
-            "heritage_mode": payload.heritage_mode,
-            "auto_generate_plan": payload.auto_generate_plan,
-        },
+    quick_meta = {
+        "enabled": True,
+        "remix_profile": payload.remix_profile,
+        "cast_preset": payload.cast_preset,
+        "heritage_mode": payload.heritage_mode,
+        "auto_generate_plan": payload.auto_generate_plan,
+        "run_end_to_end": payload.run_end_to_end,
+        "local_output_dir": payload.local_output_dir,
+        "allow_youtube_upload": payload.allow_youtube_upload,
+        "youtube_title": payload.youtube_title,
+        "youtube_privacy_status": payload.youtube_privacy_status,
     }
+    project.config_json = {**project_payload.model_dump(mode="json"), "quick_conversion": quick_meta}
+    flag_modified(project, "config_json")
+    db.add(project)
+    db.flush()
 
     if payload.auto_generate_plan:
         generated = run_remix_planner(project)
@@ -70,7 +102,37 @@ def quick_convert_project(payload: QuickProjectCreateRequest, db: Session = Depe
         project.manifest = generated["manifest"]
         project.status = "planned"
 
-    db.add(project)
+    if payload.run_end_to_end:
+        try:
+            output_artifacts = LocalQuickRemixService().run(project, payload.local_output_dir)
+            quick_meta.update(
+                {
+                    "execution": "completed",
+                    **output_artifacts,
+                    "download_url": f"{settings.api_prefix}/projects/{project.id}/quick-convert/download",
+                }
+            )
+            project.status = "exported"
+
+            if payload.allow_youtube_upload:
+                upload_title = payload.youtube_title or f"AI Remix Project {project.id}"
+                upload_description = payload.youtube_description or (
+                    f"Auto-generated quick remix export for project {project.id}."
+                )
+                quick_meta["youtube_upload"] = YouTubeUploaderService().upload(
+                    video_path=output_artifacts["output_video_path"],
+                    title=upload_title,
+                    description=upload_description,
+                    privacy_status=payload.youtube_privacy_status,
+                )
+        except Exception as exc:
+            quick_meta["execution"] = "failed"
+            quick_meta["execution_error"] = str(exc)
+            project.status = "failed"
+
+        project.config_json = {**(project.config_json or {}), "quick_conversion": quick_meta}
+        flag_modified(project, "config_json")
+
     db.commit()
     db.refresh(project)
     return project
@@ -84,6 +146,33 @@ def list_projects(db: Session = Depends(get_db)) -> list[Project]:
 @router.get("/{project_id}", response_model=ProjectDetail)
 def get_project(project_id: int, db: Session = Depends(get_db)) -> Project:
     return get_project_or_404(project_id, db)
+
+
+@router.get("/{project_id}/quick-convert/output", response_model=QuickConversionOutputResponse)
+def get_quick_convert_output(project_id: int, db: Session = Depends(get_db)) -> QuickConversionOutputResponse:
+    project = get_project_or_404(project_id, db)
+    quick = _get_quick_output_meta(project)
+    return QuickConversionOutputResponse(
+        project_id=project.id,
+        output_video_path=quick["output_video_path"],
+        output_dir=quick["output_dir"],
+        download_url=quick.get("download_url", f"{settings.api_prefix}/projects/{project.id}/quick-convert/download"),
+        youtube_upload=quick.get("youtube_upload"),
+    )
+
+
+@router.get("/{project_id}/quick-convert/download")
+def download_quick_convert_output(project_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    project = get_project_or_404(project_id, db)
+    quick = _get_quick_output_meta(project)
+    output_video_path = Path(str(quick["output_video_path"])).expanduser()
+    if not output_video_path.exists() or not output_video_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quick conversion output file not found.")
+    return FileResponse(
+        path=output_video_path,
+        media_type="video/mp4",
+        filename=output_video_path.name,
+    )
 
 
 @router.post("/{project_id}/generate-plan", response_model=ProjectPlanResponse)

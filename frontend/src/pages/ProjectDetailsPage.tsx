@@ -8,11 +8,13 @@ import {
   generateProjectPlan,
   getManifest,
   getProject,
+  getQuickConversionDownloadUrl,
+  getQuickConversionOutput,
   listCharacters,
   lockCharacter,
   regenerateCharacterAssets,
 } from "../services/api";
-import type { CharacterSummary, ProjectDetail } from "../types/project";
+import type { CharacterSummary, ProjectDetail, QuickConversionOutput } from "../types/project";
 import { useProjectTabs, type ProjectTab } from "../hooks/useProjectTabs";
 
 function TabButton({
@@ -54,6 +56,7 @@ export default function ProjectDetailsPage() {
   const [characterError, setCharacterError] = useState<string | null>(null);
   const [characterNotice, setCharacterNotice] = useState<string | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
+  const [quickOutput, setQuickOutput] = useState<QuickConversionOutput | null>(null);
   const { activeTab, setActiveTab, tabs } = useProjectTabs();
 
   const fetchProject = async () => {
@@ -87,6 +90,15 @@ export default function ProjectDetailsPage() {
     }
   };
 
+  const fetchQuickOutput = async () => {
+    try {
+      const output = await getQuickConversionOutput(parsedProjectId);
+      setQuickOutput(output);
+    } catch {
+      setQuickOutput(null);
+    }
+  };
+
   useEffect(() => {
     if (!Number.isFinite(parsedProjectId) || parsedProjectId <= 0) {
       setError("Invalid project id");
@@ -95,6 +107,7 @@ export default function ProjectDetailsPage() {
     }
     void fetchProject();
     void fetchCharacters();
+    void fetchQuickOutput();
   }, [parsedProjectId]);
 
   const runGeneratePlan = async () => {
@@ -201,6 +214,18 @@ export default function ProjectDetailsPage() {
     [project]
   );
 
+  const quickConfig = useMemo(() => {
+    if (!project?.config_json || typeof project.config_json !== "object") {
+      return null;
+    }
+    const configRecord = project.config_json as Record<string, unknown>;
+    const quick = configRecord.quick_conversion;
+    if (!quick || typeof quick !== "object") {
+      return null;
+    }
+    return quick as Record<string, unknown>;
+  }, [project?.config_json]);
+
   if (loading) {
     return <p className="text-sm text-slate-600">Loading project...</p>;
   }
@@ -234,6 +259,40 @@ export default function ProjectDetailsPage() {
           </button>
           {manifestError && <span className="text-sm text-red-700">{manifestError}</span>}
         </div>
+        {(quickOutput || Boolean(quickConfig?.execution_error)) && (
+          <div className="mt-4 space-y-2 rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+            {quickOutput && (
+              <>
+                <p>
+                  <span className="font-semibold">Quick Output Folder: </span>
+                  {quickOutput.output_dir}
+                </p>
+                <p>
+                  <span className="font-semibold">Remixed Video: </span>
+                  {quickOutput.output_video_path}
+                </p>
+                <a
+                  href={getQuickConversionDownloadUrl(project.id)}
+                  className="inline-block rounded-md bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  Download Remixed Video
+                </a>
+              </>
+            )}
+            {Boolean(quickConfig?.youtube_upload) && (
+              <p>
+                <span className="font-semibold">YouTube Upload: </span>
+                {JSON.stringify(quickConfig?.youtube_upload)}
+              </p>
+            )}
+            {Boolean(quickConfig?.execution_error) && (
+              <p className="text-red-700">
+                <span className="font-semibold">Quick Convert Error: </span>
+                {String(quickConfig?.execution_error)}
+              </p>
+            )}
+          </div>
+        )}
       </PageCard>
 
       <PageCard>
