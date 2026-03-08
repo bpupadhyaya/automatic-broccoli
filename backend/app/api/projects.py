@@ -25,10 +25,13 @@ from app.schemas.project import (
     QuickConversionProgressResponse,
     QuickConversionOutputResponse,
     QuickProjectCreateRequest,
+    YouTubeVideoDownloadRequest,
+    YouTubeVideoDownloadResponse,
 )
 from app.services.local_quick_remixer import LocalQuickRemixService
 from app.services.quick_conversion_defaults import build_quick_project_payload
 from app.services.remix_planner import run_remix_planner
+from app.services.youtube_downloader import YouTubeDownloadService
 from app.services.youtube_uploader import YouTubeUploaderService
 
 router = APIRouter()
@@ -351,6 +354,23 @@ def quick_convert_project(
 @router.get("", response_model=list[ProjectListItem])
 def list_projects(db: Session = Depends(get_db)) -> list[Project]:
     return db.query(Project).order_by(Project.created_at.desc()).all()
+
+
+@router.post("/youtube-download", response_model=YouTubeVideoDownloadResponse, status_code=status.HTTP_200_OK)
+def download_youtube_video(payload: YouTubeVideoDownloadRequest) -> YouTubeVideoDownloadResponse:
+    try:
+        result = YouTubeDownloadService().download_best_video(str(payload.youtube_video_url))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"YouTube download failed: {exc}") from exc
+
+    return YouTubeVideoDownloadResponse(
+        youtube_video_url=result["youtube_url"],
+        video_title=result["video_title"],
+        output_file_path=result["output_file_path"],
+        output_dir=result["output_dir"],
+        file_size_bytes=result["file_size_bytes"],
+        downloaded_at=result["downloaded_at"],
+    )
 
 
 @router.get("/downloads", response_model=list[QuickDownloadItem])

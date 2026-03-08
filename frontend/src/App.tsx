@@ -5,6 +5,7 @@ import CreateProjectPage from "./pages/CreateProjectPage";
 import ProjectDetailsPage from "./pages/ProjectDetailsPage";
 import QuickConvertPage from "./pages/QuickConvertPage";
 import DownloadsPage from "./pages/DownloadsPage";
+import YouTubeDownloadPage from "./pages/YouTubeDownloadPage";
 import { ROUTES } from "./routes";
 
 export default function App() {
@@ -27,6 +28,12 @@ export default function App() {
                 >
                   Quick Convert
                 </Link>
+                <Link
+                  to={ROUTES.youtubeDownload}
+                  className="rounded-md border border-brand-300 px-3 py-2 text-brand-700 hover:bg-brand-50"
+                >
+                  Download YouTube Video
+                </Link>
                 <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-100">
                   Downloads
                 </Link>
@@ -46,6 +53,7 @@ export default function App() {
         <Routes>
           <Route path={ROUTES.dashboard} element={<DashboardPage />} />
           <Route path={ROUTES.quickConvert} element={<QuickConvertPage />} />
+          <Route path={ROUTES.youtubeDownload} element={<YouTubeDownloadPage />} />
           <Route path={ROUTES.downloads} element={<DownloadsPage />} />
           <Route path={ROUTES.createProject} element={<CreateProjectPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailsPage />} />

@@ -12,6 +12,7 @@ import type {
   QuickConversionProgress,
   QuickConversionOutput,
   QuickProjectCreateInput,
+  YouTubeVideoDownloadResult,
 } from "../types/project";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
@@ -87,6 +88,13 @@ export function resolveDownloadUrl(downloadUrl: string): string {
   }
   const base = apiBaseForUrlResolution();
   return new URL(downloadUrl, base).toString();
+}
+
+export function downloadYouTubeVideo(youtubeVideoUrl: string): Promise<YouTubeVideoDownloadResult> {
+  return request<YouTubeVideoDownloadResult>("/projects/youtube-download", {
+    method: "POST",
+    body: JSON.stringify({ youtube_video_url: youtubeVideoUrl }),
+  });
 }
 
 export function getProject(projectId: number): Promise<ProjectDetail> {

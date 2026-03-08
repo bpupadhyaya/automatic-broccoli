@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://user:password@localhost:5432/remixdb"
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     quick_output_root: str = "/app/outputs"
+    youtube_download_root: str = "/host_downloads"
+    youtube_download_host_path: str | None = None
     youtube_client_secrets_path: str | None = None
     youtube_token_path: str | None = None
 

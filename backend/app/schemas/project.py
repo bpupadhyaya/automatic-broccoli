@@ -190,3 +190,16 @@ class QuickDownloadItem(ORMBaseModel):
     remix_details: str
     download_url: str
     created_at: datetime
+
+
+class YouTubeVideoDownloadRequest(ORMBaseModel):
+    youtube_video_url: HttpUrl
+
+
+class YouTubeVideoDownloadResponse(ORMBaseModel):
+    youtube_video_url: str
+    video_title: str
+    output_file_path: str
+    output_dir: str
+    file_size_bytes: int
+    downloaded_at: str

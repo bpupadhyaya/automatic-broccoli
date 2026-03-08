@@ -26,6 +26,8 @@ services:
       DATABASE_URL: postgresql://user:password@db:5432/remixdb
       CORS_ORIGINS: '["http://localhost:5179","http://127.0.0.1:5179"]'
       QUICK_OUTPUT_ROOT: /app/outputs
+      YOUTUBE_DOWNLOAD_ROOT: /host_downloads
+      YOUTUBE_DOWNLOAD_HOST_PATH: ${HOME}/Downloads
     depends_on:
       db:
         condition: service_healthy
@@ -33,6 +35,7 @@ services:
       - "18082:8000"
     volumes:
       - ./outputs:/app/outputs
+      - ${HOME}/Downloads:/host_downloads
     restart: unless-stopped
 
   frontend:

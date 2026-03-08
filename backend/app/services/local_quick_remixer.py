@@ -574,6 +574,36 @@ class LocalQuickRemixService:
 
         return segments
 
+    def _segment_end_sec(self, segment: dict[str, Any]) -> float:
+        output_start = float(segment.get("output_start_sec") or segment.get("source_start_sec") or 0.0)
+        output_duration = float(segment.get("output_duration_sec") or segment.get("source_duration_sec") or 0.0)
+        return max(output_start + max(output_duration, 0.0), output_start)
+
+    def _segment_performer(
+        self,
+        segment_plan: list[dict[str, Any]],
+        segment_index: int,
+        cast_plan: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if 0 <= segment_index < len(segment_plan):
+            candidate = segment_plan[segment_index].get("performer")
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+
+        if cast_plan:
+            cast_index = max(segment_index, 0) % len(cast_plan)
+            candidate = cast_plan[cast_index]
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+
+        return {
+            "character_id": "fallback_fictional_001",
+            "name": "Fictional Performer",
+            "heritage": "english",
+            "gender": "female",
+            "role": "lead_vocal_performer",
+        }
+
     def _render_full_length_remix(
         self,
         target_video: Path,

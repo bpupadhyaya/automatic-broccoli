@@ -175,3 +175,12 @@ export interface DownloadVideoItem {
   download_url: string;
   created_at: string;
 }
+
+export interface YouTubeVideoDownloadResult {
+  youtube_video_url: string;
+  video_title: string;
+  output_file_path: string;
+  output_dir: string;
+  file_size_bytes: number;
+  downloaded_at: string;
+}
