@@ -7,6 +7,17 @@ from app.schemas.project import (
     ProjectPlanResponse,
     ProjectSummary,
 )
+from app.schemas.pipeline import (
+    BuildShotsResponse,
+    ExportRequest,
+    ExportResponse,
+    QcRequest,
+    QcResponse,
+    RenderJobResponse,
+    RenderRequest,
+    RenderResponse,
+    ShotResponse,
+)
 
 __all__ = [
     "CharacterBible",
@@ -16,4 +27,13 @@ __all__ = [
     "ProjectListItem",
     "ProjectPlanResponse",
     "ProjectSummary",
+    "BuildShotsResponse",
+    "ShotResponse",
+    "RenderRequest",
+    "RenderJobResponse",
+    "RenderResponse",
+    "QcRequest",
+    "QcResponse",
+    "ExportRequest",
+    "ExportResponse",
 ]

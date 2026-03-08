@@ -105,6 +105,7 @@ class ProjectDetail(ProjectSummary):
     preserve_melody: bool
     beat_intensity: str
     vocal_handling: str
+    config_json: Optional[dict]
     transformation_summary: Optional[str]
     character_bible: Optional[CharacterBible]
     storyboard_scenes: Optional[list[Scene]]

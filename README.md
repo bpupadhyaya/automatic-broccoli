@@ -135,6 +135,12 @@ DATABASE_URL=postgresql://user:password@localhost:5432/remixdb
 - `GET /api/projects`
 - `GET /api/projects/{project_id}`
 - `POST /api/projects/{project_id}/generate-plan`
+- `POST /api/projects/{project_id}/build-shots`
+- `GET /api/projects/{project_id}/shots`
+- `POST /api/projects/{project_id}/render`
+- `GET /api/render-jobs/{job_id}`
+- `POST /api/projects/{project_id}/qc`
+- `POST /api/projects/{project_id}/export`
 - `GET /api/projects/{project_id}/manifest`
 
 Additional utility endpoint:
@@ -154,3 +160,33 @@ All responses are JSON.
 `manifest.future_extensions.video_generation_engines` includes placeholders for future integration with real generation engines.
 
 The current MVP keeps generation deterministic and mock-based to simplify local development and testing.
+
+## Step 2 Rendering Pipeline (Architecture)
+
+Step 2 adds a shot-based rendering pipeline aligned to production-style generation workflows:
+
+- Character consistency layer (character pack + lock rules)
+- Song analysis + scene segmentation
+- Shot builder + prompt builder (15-40 short controllable shots)
+- Queue-based rendering with provider adapters (`runway`, `veo`, `luma`)
+- QC scoring + rerender policy
+- Timeline editing + beat sync + export variants
+- Versioned manifests and export metadata tables
+
+New backend modules include:
+
+- `app/services/character_lock.py`
+- `app/services/character_pack_generator.py`
+- `app/services/audio_analyzer.py`
+- `app/services/scene_segmenter.py`
+- `app/services/shot_builder.py`
+- `app/services/prompt_builder.py`
+- `app/services/render_queue.py`
+- `app/services/provider_runway.py`
+- `app/services/provider_veo.py`
+- `app/services/provider_luma.py`
+- `app/services/qc_scoring.py`
+- `app/services/rerender_policy.py`
+- `app/services/beat_sync.py`
+- `app/services/timeline_editor.py`
+- `app/services/exporter.py`

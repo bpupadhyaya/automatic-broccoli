@@ -39,6 +39,7 @@ class Project(Base):
     vocal_handling: Mapped[str] = mapped_column(String(255), nullable=False)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    config_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     transformation_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     character_bible: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
