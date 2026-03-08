@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
-from threading import Thread
+from threading import Lock, Thread
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,6 +32,24 @@ from app.services.remix_planner import run_remix_planner
 from app.services.youtube_uploader import YouTubeUploaderService
 
 router = APIRouter()
+
+_QUICK_WORKERS_LOCK = Lock()
+_ACTIVE_QUICK_WORKERS: set[int] = set()
+
+
+def _active_quick_worker_count() -> int:
+    with _QUICK_WORKERS_LOCK:
+        return len(_ACTIVE_QUICK_WORKERS)
+
+
+def _register_quick_worker(project_id: int) -> None:
+    with _QUICK_WORKERS_LOCK:
+        _ACTIVE_QUICK_WORKERS.add(project_id)
+
+
+def _unregister_quick_worker(project_id: int) -> None:
+    with _QUICK_WORKERS_LOCK:
+        _ACTIVE_QUICK_WORKERS.discard(project_id)
 
 
 def _create_project_record(payload: ProjectCreate, db: Session) -> Project:
@@ -108,6 +126,21 @@ def _quick_progress_step(stage: str, detail: str, progress: float) -> dict[str, 
     }
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _persist_quick_runtime_state(
     db: Session,
     project: Project,
@@ -124,88 +157,115 @@ def _persist_quick_runtime_state(
 
 def _run_quick_convert_job(project_id: int, payload_data: dict[str, Any]) -> None:
     payload = QuickProjectCreateRequest.model_validate(payload_data)
+    _register_quick_worker(project_id)
 
-    with SessionLocal() as db:
-        project = db.get(Project, project_id)
-        if project is None:
-            return
+    try:
+        with SessionLocal() as db:
+            project = db.get(Project, project_id)
+            if project is None:
+                return
 
-        config = project.config_json or {}
-        quick_meta_raw = config.get("quick_conversion")
-        quick_meta: dict[str, Any] = quick_meta_raw if isinstance(quick_meta_raw, dict) else {}
-        existing_steps = quick_meta.get("processing_steps")
-        processing_steps: list[dict[str, Any]] = existing_steps if isinstance(existing_steps, list) else []
-        quick_meta["processing_steps"] = processing_steps
+            config = project.config_json or {}
+            quick_meta_raw = config.get("quick_conversion")
+            quick_meta: dict[str, Any] = quick_meta_raw if isinstance(quick_meta_raw, dict) else {}
+            existing_steps = quick_meta.get("processing_steps")
+            processing_steps: list[dict[str, Any]] = existing_steps if isinstance(existing_steps, list) else []
+            quick_meta["processing_steps"] = processing_steps
+            quick_meta["started_at"] = quick_meta.get("started_at") or _utc_iso_now()
+            quick_meta["active_worker_threads"] = _active_quick_worker_count()
 
-        def persist_progress_step(step: dict[str, Any]) -> None:
-            processing_steps.append(step)
-            quick_meta["processing_steps"] = processing_steps[-240:]
-            quick_meta["execution"] = "running"
-            quick_meta["current_stage"] = str(step.get("stage") or "Running")
-            step_progress = step.get("progress")
-            if isinstance(step_progress, (float, int)):
-                quick_meta["progress"] = round(max(0.0, min(1.0, float(step_progress))), 4)
-            quick_meta.pop("execution_error", None)
-            _persist_quick_runtime_state(db, project, quick_meta, status_value="processing")
+            def persist_progress_step(step: dict[str, Any]) -> None:
+                processing_steps.append(step)
+                quick_meta["processing_steps"] = processing_steps[-240:]
+                quick_meta["execution"] = "running"
+                quick_meta["current_stage"] = str(step.get("stage") or "Running")
+                step_workers = step.get("workers")
+                if isinstance(step_workers, int) and step_workers > 0:
+                    quick_meta["active_worker_threads"] = step_workers
+                elif not isinstance(quick_meta.get("active_worker_threads"), int):
+                    quick_meta["active_worker_threads"] = _active_quick_worker_count()
+                step_progress = step.get("progress")
+                if isinstance(step_progress, (float, int)):
+                    quick_meta["progress"] = round(max(0.0, min(1.0, float(step_progress))), 4)
+                quick_meta.pop("execution_error", None)
+                _persist_quick_runtime_state(db, project, quick_meta, status_value="processing")
 
-        persist_progress_step(
-            _quick_progress_step(
-                "Queued",
-                "Quick conversion worker started.",
-                quick_meta.get("progress", 0.02),
-            )
-        )
-
-        try:
-            output_artifacts = LocalQuickRemixService().run(
-                project=project,
-                local_output_dir=payload.local_output_dir,
-                remix_profile=payload.remix_profile,
-                cast_preset=payload.cast_preset,
-                heritage_mode=payload.heritage_mode,
-                progress_callback=persist_progress_step,
-            )
-            quick_meta.update(
-                {
-                    "execution": "completed",
-                    **output_artifacts,
-                    "download_url": f"{settings.api_prefix}/projects/{project.id}/quick-convert/download",
-                    "progress": 1.0,
-                    "current_stage": "Completed",
-                }
-            )
-            project.status = "exported"
-
-            if payload.allow_youtube_upload:
-                upload_title = payload.youtube_title or f"AI Remix Project {project.id}"
-                upload_description = payload.youtube_description or (
-                    f"Auto-generated quick remix export for project {project.id}."
-                )
-                quick_meta["youtube_upload"] = YouTubeUploaderService().upload(
-                    video_path=output_artifacts["output_video_path"],
-                    title=upload_title,
-                    description=upload_description,
-                    privacy_status=payload.youtube_privacy_status,
-                )
-        except Exception as exc:
-            quick_meta["execution"] = "failed"
-            quick_meta["execution_error"] = str(exc)
-            quick_meta["progress"] = max(float(quick_meta.get("progress") or 0.0), 0.01)
-            quick_meta["current_stage"] = "Failed"
-            processing_steps.append(
+            persist_progress_step(
                 _quick_progress_step(
-                    "Failed",
-                    f"Quick conversion failed: {exc}",
-                    quick_meta["progress"],
+                    "Queued",
+                    "Quick conversion worker started.",
+                    quick_meta.get("progress", 0.02),
                 )
             )
-            quick_meta["processing_steps"] = processing_steps[-240:]
-            project.status = "failed"
 
-        project.config_json = {**(project.config_json or {}), "quick_conversion": quick_meta}
-        flag_modified(project, "config_json")
-        db.add(project)
-        db.commit()
+            try:
+                output_artifacts = LocalQuickRemixService().run(
+                    project=project,
+                    local_output_dir=payload.local_output_dir,
+                    remix_profile=payload.remix_profile,
+                    cast_preset=payload.cast_preset,
+                    heritage_mode=payload.heritage_mode,
+                    progress_callback=persist_progress_step,
+                )
+                quick_meta.update(
+                    {
+                        "execution": "completed",
+                        **output_artifacts,
+                        "download_url": f"{settings.api_prefix}/projects/{project.id}/quick-convert/download",
+                        "progress": 1.0,
+                        "current_stage": "Completed",
+                        "finished_at": _utc_iso_now(),
+                    }
+                )
+                project.status = "exported"
+
+                if payload.allow_youtube_upload:
+                    upload_title = payload.youtube_title or f"AI Remix Project {project.id}"
+                    upload_description = payload.youtube_description or (
+                        f"Auto-generated quick remix export for project {project.id}."
+                    )
+                    quick_meta["youtube_upload"] = YouTubeUploaderService().upload(
+                        video_path=output_artifacts["output_video_path"],
+                        title=upload_title,
+                        description=upload_description,
+                        privacy_status=payload.youtube_privacy_status,
+                    )
+            except Exception as exc:
+                quick_meta["execution"] = "failed"
+                quick_meta["execution_error"] = str(exc)
+                quick_meta["progress"] = max(float(quick_meta.get("progress") or 0.0), 0.01)
+                quick_meta["current_stage"] = "Failed"
+                quick_meta["finished_at"] = _utc_iso_now()
+                processing_steps.append(
+                    _quick_progress_step(
+                        "Failed",
+                        f"Quick conversion failed: {exc}",
+                        quick_meta["progress"],
+                    )
+                )
+                quick_meta["processing_steps"] = processing_steps[-240:]
+                project.status = "failed"
+
+            quick_meta["active_worker_threads"] = _active_quick_worker_count()
+            project.config_json = {**(project.config_json or {}), "quick_conversion": quick_meta}
+            flag_modified(project, "config_json")
+            db.add(project)
+            db.commit()
+    finally:
+        _unregister_quick_worker(project_id)
+        with SessionLocal() as db:
+            project = db.get(Project, project_id)
+            if project is not None:
+                config = project.config_json or {}
+                quick_meta_raw = config.get("quick_conversion")
+                if isinstance(quick_meta_raw, dict):
+                    quick_meta_raw["active_worker_threads"] = _active_quick_worker_count()
+                    if quick_meta_raw.get("execution") in {"completed", "failed"} and not quick_meta_raw.get("finished_at"):
+                        quick_meta_raw["finished_at"] = _utc_iso_now()
+                    project.config_json = {**config, "quick_conversion": quick_meta_raw}
+                    flag_modified(project, "config_json")
+                    db.add(project)
+                    db.commit()
 
 
 @router.post("", response_model=ProjectDetail, status_code=status.HTTP_201_CREATED)
@@ -245,6 +305,9 @@ def quick_convert_project(
         "execution": "queued" if payload.run_end_to_end else "not_started",
         "progress": 0.01 if payload.run_end_to_end else 0.0,
         "current_stage": "Queued" if payload.run_end_to_end else None,
+        "started_at": _utc_iso_now() if payload.run_end_to_end else None,
+        "finished_at": None,
+        "active_worker_threads": _active_quick_worker_count(),
         "processing_steps": [],
     }
     project.config_json = {**project_payload.model_dump(mode="json"), "quick_conversion": quick_meta}
@@ -373,6 +436,21 @@ def get_quick_convert_progress(project_id: int, db: Session = Depends(get_db)) -
     if isinstance(output_video_path, str) and output_video_path and not isinstance(download_url, str):
         download_url = f"{settings.api_prefix}/projects/{project.id}/quick-convert/download"
 
+    started_at_raw = quick_meta.get("started_at")
+    finished_at_raw = quick_meta.get("finished_at")
+    started_dt = _parse_iso_datetime(started_at_raw)
+    finished_dt = _parse_iso_datetime(finished_at_raw)
+    elapsed_seconds: float | None = None
+    if started_dt is not None:
+        end_dt = finished_dt if finished_dt is not None else datetime.now(timezone.utc)
+        elapsed_seconds = round(max((end_dt - started_dt).total_seconds(), 0.0), 1)
+
+    quick_workers_raw = quick_meta.get("active_worker_threads")
+    if isinstance(quick_workers_raw, int) and quick_workers_raw >= 0:
+        active_worker_threads = quick_workers_raw
+    else:
+        active_worker_threads = _active_quick_worker_count()
+
     return QuickConversionProgressResponse(
         project_id=project.id,
         status=project.status,
@@ -380,6 +458,9 @@ def get_quick_convert_progress(project_id: int, db: Session = Depends(get_db)) -
         progress=round(progress_value, 4),
         current_stage=str(quick_meta.get("current_stage")) if quick_meta.get("current_stage") is not None else None,
         processing_steps=steps,
+        started_at=str(started_at_raw) if isinstance(started_at_raw, str) and started_at_raw else None,
+        elapsed_seconds=elapsed_seconds,
+        active_worker_threads=active_worker_threads,
         output_video_path=output_video_path if isinstance(output_video_path, str) else None,
         download_url=download_url if isinstance(download_url, str) else None,
         execution_error=str(quick_meta.get("execution_error")) if quick_meta.get("execution_error") else None,

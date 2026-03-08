@@ -175,6 +175,9 @@ class QuickConversionProgressResponse(ORMBaseModel):
     progress: float = Field(ge=0.0, le=1.0)
     current_stage: Optional[str] = None
     processing_steps: list[QuickProcessingStep] = Field(default_factory=list)
+    started_at: Optional[str] = None
+    elapsed_seconds: Optional[float] = None
+    active_worker_threads: int = 0
     output_video_path: Optional[str] = None
     download_url: Optional[str] = None
     execution_error: Optional[str] = None

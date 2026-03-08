@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -136,6 +138,7 @@ class LocalQuickRemixService:
         self._render_full_length_remix(
             target_video=target_video,
             output_video_path=output_video_path,
+            example_remix_video=example_remix,
             transformation_profile=transformation_profile,
             cast_plan=cast_plan,
             segment_plan=segment_plan,
@@ -186,6 +189,10 @@ class LocalQuickRemixService:
             output_dir = base_root / f"project_{project_id}"
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _compute_worker_threads(self) -> int:
+        host_cpus = os.cpu_count() or 10
+        return max(10, min(int(host_cpus), 64))
 
     def _download_youtube_video(self, url: str, output_stem: Path) -> Path:
         output_stem.parent.mkdir(parents=True, exist_ok=True)
@@ -571,6 +578,7 @@ class LocalQuickRemixService:
         self,
         target_video: Path,
         output_video_path: Path,
+        example_remix_video: Path,
         transformation_profile: dict[str, float | str],
         cast_plan: list[dict[str, Any]],
         segment_plan: list[dict[str, Any]],
@@ -653,6 +661,7 @@ class LocalQuickRemixService:
         self._run_frame_actor_replacement(
             styled_video=styled_video_path,
             actor_video=actor_replaced_video_path,
+            example_remix_video=example_remix_video,
             cast_plan=cast_plan,
             segment_plan=segment_plan,
             processing_steps=processing_steps,
@@ -768,12 +777,14 @@ class LocalQuickRemixService:
         pitch = float(style["pitch_factor"])
         return (
             "[0:a]"
-            f"rubberband=pitch={pitch:.4f}:tempo=1.0:transients=smooth:detector=compound:"
-            "phase=laminar:window=short:formant=preserved:pitchq=consistency,"
+            f"rubberband=pitch={pitch:.4f}:tempo=1.0:transients=crisp:detector=compound:"
+            "phase=independent:window=short:formant=shifted:pitchq=quality,"
+            "firequalizer=gain='if(lt(f,220),-1.0,if(lt(f,900),0.8,if(lt(f,3400),2.1,0.4)))',"
             f"equalizer=f=180:t=q:w=0.9:g={float(style['bass_gain']):.3f},"
             f"equalizer=f=2600:t=q:w=1.2:g={float(style['presence_gain']):.3f},"
             "highpass=f=70,lowpass=f=14500,"
             f"aecho=0.82:0.88:{int(float(style['echo_delay']))}:{float(style['echo_decay']):.3f},"
+            "chorus=0.5:0.9:44:0.24:0.26:0.08,"
             f"volume={float(style['volume']):.4f}[aout]"
         )
 
@@ -781,6 +792,7 @@ class LocalQuickRemixService:
         self,
         styled_video: Path,
         actor_video: Path,
+        example_remix_video: Path,
         cast_plan: list[dict[str, Any]],
         segment_plan: list[dict[str, Any]],
         processing_steps: list[dict[str, Any]],
@@ -788,7 +800,17 @@ class LocalQuickRemixService:
         progress_start: float,
         progress_end: float,
     ) -> None:
-        cascade = self._load_face_cascade()
+        frontal_cascade = self._load_face_cascade()
+        profile_cascade = self._load_profile_cascade()
+        reference_library = self._prepare_reference_portrait_library(
+            example_remix_video=example_remix_video,
+            cast_plan=cast_plan,
+            frontal_cascade=frontal_cascade,
+            profile_cascade=profile_cascade,
+            processing_steps=processing_steps,
+            progress_callback=progress_callback,
+            progress=progress_start + 0.005,
+        )
         capture = cv2.VideoCapture(str(styled_video))
         if not capture.isOpened():
             raise RuntimeError(f"Unable to open styled video for actor replacement: {styled_video}")
@@ -811,95 +833,398 @@ class LocalQuickRemixService:
             capture.release()
             raise RuntimeError(f"Unable to open output writer for actor replacement: {actor_video}")
 
-        detection_every = 3
+        worker_threads = self._compute_worker_threads()
+        max_inflight = max(worker_threads * 3, 24)
+        detection_every = 2
         progress_step = max(1, frame_count // 45) if frame_count > 0 else 60
         last_boxes: list[tuple[int, int, int, int]] = []
         stale_detection_frames = 0
         segment_cursor = 0
         frame_index = 0
+        written_frames = 0
+        next_write_index = 0
+        pending: dict[int, Future[np.ndarray]] = {}
+        pending_performer: dict[int, str] = {}
 
-        try:
-            while True:
-                ok, frame = capture.read()
-                if not ok:
-                    break
+        self._append_processing_step(
+            processing_steps,
+            "Face Synthesis",
+            f"Launching {worker_threads} transformation workers based on detected host CPU capacity.",
+            progress_start + 0.01,
+            callback=progress_callback,
+            extra={"workers": worker_threads},
+        )
 
-                timestamp_sec = frame_index / max(fps, 1.0)
-                while segment_cursor + 1 < len(segment_plan):
-                    if timestamp_sec < self._segment_end_sec(segment_plan[segment_cursor]):
-                        break
-                    segment_cursor += 1
-                performer = self._segment_performer(segment_plan, segment_cursor, cast_plan)
-
-                should_detect = frame_index % detection_every == 0 or not last_boxes
-                current_boxes = list(last_boxes)
-                if should_detect and cascade is not None:
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    detections = cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(48, 48))
-                    detected_boxes = self._normalize_face_boxes(detections, width, height)
-                    if detected_boxes:
-                        current_boxes = detected_boxes
-                        last_boxes = detected_boxes
-                        stale_detection_frames = 0
-                    else:
-                        stale_detection_frames += 1
-                        if stale_detection_frames > 15:
-                            last_boxes = []
-                            current_boxes = []
-                elif last_boxes:
-                    stale_detection_frames += 1
-                    if stale_detection_frames > 15:
-                        last_boxes = []
-                        current_boxes = []
-
-                if not current_boxes:
-                    current_boxes = self._fallback_face_boxes(width, height, performer)
-
-                frame = self._apply_fictitious_actor_faces(
-                    frame=frame,
-                    face_boxes=current_boxes,
-                    performer=performer,
-                    frame_index=frame_index,
-                )
-                writer.write(frame)
-                frame_index += 1
-
-                if frame_count > 0 and (frame_index == 1 or frame_index % progress_step == 0 or frame_index >= frame_count):
-                    ratio = self._clamp(frame_index / max(frame_count, 1), 0.0, 1.0)
+        def flush_ready_frames(*, force_wait: bool) -> None:
+            nonlocal next_write_index, written_frames
+            if force_wait and next_write_index in pending and not pending[next_write_index].done():
+                pending[next_write_index].result()
+            while next_write_index in pending and pending[next_write_index].done():
+                transformed = pending.pop(next_write_index).result()
+                performer_name = pending_performer.pop(next_write_index, "fictitious cast")
+                writer.write(transformed)
+                written_frames += 1
+                if frame_count > 0 and (
+                    written_frames == 1 or written_frames % progress_step == 0 or written_frames >= frame_count
+                ):
+                    ratio = self._clamp(written_frames / max(frame_count, 1), 0.0, 1.0)
                     mapped = self._clamp(
                         progress_start + (progress_end - progress_start) * ratio,
                         progress_start,
                         progress_end,
                     )
-                    performer_name = str(performer.get("name") or "fictitious cast")
                     self._append_processing_step(
                         processing_steps,
                         "Face Synthesis",
-                        f"Replacing detected actors with synthesized fictitious cast identities ({int(ratio * 100)}%) [{performer_name}]",
+                        (
+                            f"Replacing detected actors and upper-body regions with photo-based fictitious cast "
+                            f"identities ({int(ratio * 100)}%) [{performer_name}]"
+                        ),
                         mapped,
                         callback=progress_callback,
+                        extra={"workers": worker_threads},
                     )
+                next_write_index += 1
+
+        try:
+            with ThreadPoolExecutor(max_workers=worker_threads) as executor:
+                while True:
+                    ok, frame = capture.read()
+                    if not ok:
+                        break
+
+                    timestamp_sec = frame_index / max(fps, 1.0)
+                    while segment_cursor + 1 < len(segment_plan):
+                        if timestamp_sec < self._segment_end_sec(segment_plan[segment_cursor]):
+                            break
+                        segment_cursor += 1
+                    primary_performer = self._segment_performer(segment_plan, segment_cursor, cast_plan)
+
+                    should_detect = frame_index % detection_every == 0 or not last_boxes
+                    current_boxes = list(last_boxes)
+                    if should_detect:
+                        detected_boxes = self._detect_face_boxes(
+                            frame=frame,
+                            width=width,
+                            height=height,
+                            frontal_cascade=frontal_cascade,
+                            profile_cascade=profile_cascade,
+                            max_faces=8,
+                        )
+                        if detected_boxes:
+                            current_boxes = detected_boxes
+                            last_boxes = detected_boxes
+                            stale_detection_frames = 0
+                        else:
+                            stale_detection_frames += 1
+                            if stale_detection_frames > 15:
+                                last_boxes = []
+                                current_boxes = []
+                    elif last_boxes:
+                        stale_detection_frames += 1
+                        if stale_detection_frames > 15:
+                            last_boxes = []
+                            current_boxes = []
+
+                    if not current_boxes:
+                        current_boxes = self._fallback_face_boxes(width, height, primary_performer)
+
+                    assigned_performers = self._frame_performer_sequence(
+                        primary_performer=primary_performer,
+                        cast_plan=cast_plan,
+                        target_count=len(current_boxes),
+                    )
+                    performer_name = str(primary_performer.get("name") or "fictitious cast")
+                    frame_copy = frame.copy()
+                    pending[frame_index] = executor.submit(
+                        self._apply_fictitious_actor_faces,
+                        frame_copy,
+                        current_boxes,
+                        assigned_performers,
+                        reference_library,
+                        frame_index,
+                    )
+                    pending_performer[frame_index] = performer_name
+                    frame_index += 1
+
+                    flush_ready_frames(force_wait=False)
+                    if len(pending) >= max_inflight:
+                        flush_ready_frames(force_wait=True)
+
+                while pending:
+                    flush_ready_frames(force_wait=True)
         finally:
             capture.release()
             writer.release()
 
-    def _segment_end_sec(self, segment: dict[str, Any]) -> float:
-        start = float(segment.get("source_start_sec") or segment.get("output_start_sec") or 0.0)
-        duration = float(segment.get("source_duration_sec") or segment.get("output_duration_sec") or segment.get("duration_sec") or 0.0)
-        return start + max(duration, 0.01)
-
-    def _segment_performer(
+    def _prepare_reference_portrait_library(
         self,
-        segment_plan: list[dict[str, Any]],
-        segment_cursor: int,
+        example_remix_video: Path,
         cast_plan: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        if segment_plan:
-            segment = segment_plan[min(segment_cursor, len(segment_plan) - 1)]
-            performer_candidate = segment.get("performer")
-            if isinstance(performer_candidate, dict):
-                return performer_candidate
-        return cast_plan[0] if cast_plan else {"heritage": "english", "gender": "female", "role": "lead_vocal_performer"}
+        frontal_cascade: cv2.CascadeClassifier | None,
+        profile_cascade: cv2.CascadeClassifier | None,
+        processing_steps: list[dict[str, Any]],
+        progress_callback: Callable[[dict[str, Any]], None] | None,
+        progress: float,
+    ) -> dict[str, list[dict[str, Any]]]:
+        local_portraits = self._load_reference_faces_from_disk(frontal_cascade, profile_cascade)
+        example_portraits = self._extract_reference_faces_from_video(
+            video_path=example_remix_video,
+            frontal_cascade=frontal_cascade,
+            profile_cascade=profile_cascade,
+            max_portraits=56,
+        )
+
+        keys = [f"{heritage}:{gender}" for heritage in ("english", "nepali", "hindi") for gender in ("female", "male")]
+        library: dict[str, list[dict[str, Any]]] = {}
+        for key in keys:
+            pool = list(local_portraits.get(key, []))
+            if not pool:
+                heritage, _ = key.split(":")
+                pool = list(local_portraits.get(f"{heritage}:female", [])) + list(local_portraits.get(f"{heritage}:male", []))
+            if not pool:
+                pool = list(example_portraits)
+            library[key] = pool
+
+        all_pool: list[dict[str, Any]] = []
+        for key in keys:
+            all_pool.extend(library.get(key, []))
+        all_pool.extend(example_portraits)
+
+        if not all_pool:
+            for key in keys:
+                heritage, gender = key.split(":")
+                patch, _, _ = self._build_fictitious_face_patch({"heritage": heritage, "gender": gender}, 320, 480, seed=1200)
+                fallback_entry = {
+                    "image": patch,
+                    "face_box": (80, 120, 160, 220),
+                    "source": "synthetic-fallback",
+                }
+                library[key] = [fallback_entry]
+                all_pool.append(fallback_entry)
+
+        library["all"] = all_pool
+        self._append_processing_step(
+            processing_steps,
+            "Reference Portraits",
+            (
+                f"Prepared photo reference library: local={sum(len(items) for items in local_portraits.values())}, "
+                f"example={len(example_portraits)}, total={len(all_pool)}."
+            ),
+            progress,
+            callback=progress_callback,
+        )
+        return library
+
+    def _load_reference_faces_from_disk(
+        self,
+        frontal_cascade: cv2.CascadeClassifier | None,
+        profile_cascade: cv2.CascadeClassifier | None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        roots = [
+            Path(settings.quick_output_root).expanduser() / "reference_faces",
+            Path("/app/reference_faces"),
+            Path(__file__).resolve().parents[2] / "reference_faces",
+        ]
+        deduped_roots: list[Path] = []
+        for root in roots:
+            candidate = root.resolve() if root.exists() else root
+            if candidate not in deduped_roots:
+                deduped_roots.append(candidate)
+
+        result: dict[str, list[dict[str, Any]]] = {}
+        for heritage in ("english", "nepali", "hindi"):
+            for gender in ("female", "male"):
+                key = f"{heritage}:{gender}"
+                result[key] = []
+                image_paths: list[Path] = []
+                for root in deduped_roots:
+                    if not root.exists():
+                        continue
+                    patterns = [root / heritage / gender, root / heritage]
+                    for pattern in patterns:
+                        if not pattern.exists():
+                            continue
+                        for suffix in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+                            image_paths.extend(sorted(pattern.glob(suffix)))
+
+                seen_paths: set[Path] = set()
+                unique_paths: list[Path] = []
+                for image_path in image_paths:
+                    if image_path in seen_paths:
+                        continue
+                    seen_paths.add(image_path)
+                    unique_paths.append(image_path)
+
+                for image_path in unique_paths[:32]:
+                    image = cv2.imread(str(image_path))
+                    if image is None or image.size == 0:
+                        continue
+                    h, w = image.shape[:2]
+                    detected = self._detect_face_boxes(
+                        frame=image,
+                        width=w,
+                        height=h,
+                        frontal_cascade=frontal_cascade,
+                        profile_cascade=profile_cascade,
+                        max_faces=2,
+                    )
+                    if not detected:
+                        detected = [(int(w * 0.30), int(h * 0.15), int(w * 0.40), int(h * 0.45))]
+                    for box in detected[:2]:
+                        portrait = self._extract_portrait_from_frame(image, box, source=str(image_path))
+                        if portrait is not None:
+                            result[key].append(portrait)
+        return result
+
+    def _extract_reference_faces_from_video(
+        self,
+        video_path: Path,
+        frontal_cascade: cv2.CascadeClassifier | None,
+        profile_cascade: cv2.CascadeClassifier | None,
+        max_portraits: int,
+    ) -> list[dict[str, Any]]:
+        portraits: list[dict[str, Any]] = []
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            return portraits
+
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        sample_every = max(1, frame_count // 90) if frame_count > 0 else 20
+        frame_index = 0
+        try:
+            while len(portraits) < max_portraits:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if frame_index % sample_every != 0:
+                    frame_index += 1
+                    continue
+
+                h, w = frame.shape[:2]
+                detected = self._detect_face_boxes(
+                    frame=frame,
+                    width=w,
+                    height=h,
+                    frontal_cascade=frontal_cascade,
+                    profile_cascade=profile_cascade,
+                    max_faces=3,
+                )
+                for box in detected:
+                    portrait = self._extract_portrait_from_frame(frame, box, source=f"example-remix:{frame_index}")
+                    if portrait is not None:
+                        portraits.append(portrait)
+                        if len(portraits) >= max_portraits:
+                            break
+                frame_index += 1
+        finally:
+            capture.release()
+        return portraits
+
+    def _extract_portrait_from_frame(
+        self,
+        frame: np.ndarray,
+        face_box: tuple[int, int, int, int],
+        source: str,
+    ) -> dict[str, Any] | None:
+        x, y, w, h = face_box
+        if w <= 2 or h <= 2:
+            return None
+        frame_h, frame_w = frame.shape[:2]
+        left = max(int(x - (w * 0.45)), 0)
+        top = max(int(y - (h * 0.40)), 0)
+        right = min(int(x + (w * 1.45)), frame_w)
+        bottom = min(int(y + (h * 2.25)), frame_h)
+        if right - left < 32 or bottom - top < 32:
+            return None
+
+        portrait = frame[top:bottom, left:right].copy()
+        if portrait.size == 0:
+            return None
+
+        target_w, target_h = 320, 480
+        resized = cv2.resize(portrait, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+        scale_x = target_w / max(right - left, 1)
+        scale_y = target_h / max(bottom - top, 1)
+        face_rel_x = int((x - left) * scale_x)
+        face_rel_y = int((y - top) * scale_y)
+        face_rel_w = int(w * scale_x)
+        face_rel_h = int(h * scale_y)
+        face_rel_x = int(self._clamp(face_rel_x, 0, target_w - 2))
+        face_rel_y = int(self._clamp(face_rel_y, 0, target_h - 2))
+        face_rel_w = int(self._clamp(face_rel_w, 8, target_w - face_rel_x))
+        face_rel_h = int(self._clamp(face_rel_h, 8, target_h - face_rel_y))
+        return {
+            "image": resized,
+            "face_box": (face_rel_x, face_rel_y, face_rel_w, face_rel_h),
+            "source": source,
+        }
+
+    def _frame_performer_sequence(
+        self,
+        primary_performer: dict[str, Any],
+        cast_plan: list[dict[str, Any]],
+        target_count: int,
+    ) -> list[dict[str, Any]]:
+        ordered: list[dict[str, Any]] = [primary_performer]
+        primary_id = str(primary_performer.get("character_id") or "")
+        for performer in cast_plan:
+            performer_id = str(performer.get("character_id") or "")
+            if performer_id and performer_id == primary_id:
+                continue
+            ordered.append(performer)
+        if not ordered:
+            ordered = [{"heritage": "english", "gender": "female", "role": "lead_vocal_performer"}]
+        return [ordered[index % len(ordered)] for index in range(max(1, target_count))]
+
+    def _select_reference_portrait_for_performer(
+        self,
+        performer: dict[str, Any],
+        reference_library: dict[str, list[dict[str, Any]]],
+        frame_index: int,
+        box_index: int,
+    ) -> dict[str, Any] | None:
+        heritage = str(performer.get("heritage") or "english")
+        gender = str(performer.get("gender") or "female")
+        key = f"{heritage}:{'female' if gender == 'female' else 'male'}"
+        pool = reference_library.get(key) or reference_library.get("all") or []
+        if not pool:
+            return None
+        seed = self._performer_seed(performer) + (frame_index // 6) + (box_index * 31)
+        return pool[seed % len(pool)]
+
+    def _detect_face_boxes(
+        self,
+        frame: np.ndarray,
+        width: int,
+        height: int,
+        frontal_cascade: cv2.CascadeClassifier | None,
+        profile_cascade: cv2.CascadeClassifier | None,
+        max_faces: int,
+    ) -> list[tuple[int, int, int, int]]:
+        if frontal_cascade is None and profile_cascade is None:
+            return []
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        candidates: list[tuple[int, int, int, int]] = []
+
+        if frontal_cascade is not None:
+            frontal = frontal_cascade.detectMultiScale(gray, scaleFactor=1.06, minNeighbors=3, minSize=(30, 30))
+            for detection in frontal:
+                candidates.append((int(detection[0]), int(detection[1]), int(detection[2]), int(detection[3])))
+
+        if profile_cascade is not None:
+            profile_left = profile_cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(30, 30))
+            for detection in profile_left:
+                candidates.append((int(detection[0]), int(detection[1]), int(detection[2]), int(detection[3])))
+            flipped = cv2.flip(gray, 1)
+            profile_right = profile_cascade.detectMultiScale(flipped, scaleFactor=1.08, minNeighbors=4, minSize=(30, 30))
+            for detection in profile_right:
+                x, y, w, h = int(detection[0]), int(detection[1]), int(detection[2]), int(detection[3])
+                candidates.append((width - (x + w), y, w, h))
+
+        normalized = self._normalize_face_boxes(candidates, width, height)
+        filtered = self._non_max_suppress_boxes(normalized, iou_threshold=0.34)
+        return filtered[:max_faces]
 
     def _load_face_cascade(self) -> cv2.CascadeClassifier | None:
         if hasattr(self, "_cached_face_cascade"):
@@ -919,43 +1244,101 @@ class LocalQuickRemixService:
         setattr(self, "_cached_face_cascade", cascade)
         return cascade
 
+    def _load_profile_cascade(self) -> cv2.CascadeClassifier | None:
+        if hasattr(self, "_cached_profile_cascade"):
+            cached = getattr(self, "_cached_profile_cascade")
+            return cached if isinstance(cached, cv2.CascadeClassifier) else None
+
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_profileface.xml"
+        if not cascade_path.exists():
+            setattr(self, "_cached_profile_cascade", None)
+            return None
+
+        cascade = cv2.CascadeClassifier(str(cascade_path))
+        if cascade.empty():
+            setattr(self, "_cached_profile_cascade", None)
+            return None
+
+        setattr(self, "_cached_profile_cascade", cascade)
+        return cascade
+
     def _normalize_face_boxes(self, detections: Any, width: int, height: int) -> list[tuple[int, int, int, int]]:
         boxes: list[tuple[int, int, int, int]] = []
         for detection in detections:
             x, y, w, h = (int(detection[0]), int(detection[1]), int(detection[2]), int(detection[3]))
-            if w * h < 2200:
+            if w * h < 1100:
                 continue
-            expand_w = int(w * 0.28)
-            expand_h = int(h * 0.42)
+            expand_w = int(w * 0.34)
+            expand_h = int(h * 0.54)
             nx = max(x - (expand_w // 2), 0)
-            ny = max(y - int(h * 0.34), 0)
+            ny = max(y - int(h * 0.30), 0)
             nw = min(w + expand_w, width - nx)
             nh = min(h + expand_h, height - ny)
-            if nw < 28 or nh < 28:
+            if nw < 26 or nh < 26:
                 continue
             boxes.append((nx, ny, nw, nh))
 
         boxes.sort(key=lambda item: item[2] * item[3], reverse=True)
-        return boxes[:4]
+        return boxes[:10]
+
+    def _non_max_suppress_boxes(
+        self,
+        boxes: list[tuple[int, int, int, int]],
+        iou_threshold: float,
+    ) -> list[tuple[int, int, int, int]]:
+        selected: list[tuple[int, int, int, int]] = []
+        for candidate in boxes:
+            should_keep = True
+            for existing in selected:
+                if self._box_iou(candidate, existing) > iou_threshold:
+                    should_keep = False
+                    break
+            if should_keep:
+                selected.append(candidate)
+        return selected
+
+    def _box_iou(self, a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+        ax1, ay1, aw, ah = a
+        bx1, by1, bw, bh = b
+        ax2, ay2 = ax1 + aw, ay1 + ah
+        bx2, by2 = bx1 + bw, by1 + bh
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(inter_x2 - inter_x1, 0)
+        inter_h = max(inter_y2 - inter_y1, 0)
+        inter_area = inter_w * inter_h
+        if inter_area <= 0:
+            return 0.0
+        union = (aw * ah) + (bw * bh) - inter_area
+        if union <= 0:
+            return 0.0
+        return inter_area / union
 
     def _fallback_face_boxes(self, width: int, height: int, performer: dict[str, Any]) -> list[tuple[int, int, int, int]]:
         role = str(performer.get("role") or "dance_performer")
         if role == "lead_vocal_performer":
-            return [(int(width * 0.31), int(height * 0.07), int(width * 0.38), int(height * 0.46))]
+            return [
+                (int(width * 0.30), int(height * 0.08), int(width * 0.38), int(height * 0.44)),
+                (int(width * 0.06), int(height * 0.12), int(width * 0.24), int(height * 0.34)),
+                (int(width * 0.70), int(height * 0.12), int(width * 0.24), int(height * 0.34)),
+            ]
         return [
-            (int(width * 0.10), int(height * 0.10), int(width * 0.28), int(height * 0.36)),
-            (int(width * 0.62), int(height * 0.10), int(width * 0.28), int(height * 0.36)),
+            (int(width * 0.08), int(height * 0.10), int(width * 0.26), int(height * 0.34)),
+            (int(width * 0.36), int(height * 0.09), int(width * 0.26), int(height * 0.34)),
+            (int(width * 0.66), int(height * 0.10), int(width * 0.26), int(height * 0.34)),
         ]
 
     def _apply_fictitious_actor_faces(
         self,
         frame: np.ndarray,
         face_boxes: list[tuple[int, int, int, int]],
-        performer: dict[str, Any],
+        performers: list[dict[str, Any]],
+        reference_library: dict[str, list[dict[str, Any]]],
         frame_index: int,
     ) -> np.ndarray:
         output = frame.copy()
-        performer_seed = self._performer_seed(performer)
         for box_index, (x, y, w, h) in enumerate(face_boxes):
             if w <= 1 or h <= 1:
                 continue
@@ -966,22 +1349,138 @@ class LocalQuickRemixService:
 
             patch_width = x2 - x
             patch_height = y2 - y
-            seed = performer_seed + (box_index * 101) + (frame_index // 7)
-            patch, mask, blend_strength = self._build_fictitious_face_patch(performer, patch_width, patch_height, seed)
-            roi = output[y:y2, x:x2]
-            alpha = (mask.astype(np.float32) / 255.0) * blend_strength
-            alpha_3 = np.repeat(alpha[:, :, None], 3, axis=2)
-            blended = (roi.astype(np.float32) * (1.0 - alpha_3)) + (patch.astype(np.float32) * alpha_3)
-            blended_u8 = np.clip(blended, 0, 255).astype(np.uint8)
-            sharpened = cv2.addWeighted(
-                blended_u8,
-                1.25,
-                cv2.GaussianBlur(blended_u8, (0, 0), 1.0),
-                -0.25,
-                0,
+            performer = performers[box_index % len(performers)] if performers else {"heritage": "english", "gender": "female"}
+            portrait = self._select_reference_portrait_for_performer(
+                performer=performer,
+                reference_library=reference_library,
+                frame_index=frame_index,
+                box_index=box_index,
             )
-            output[y:y2, x:x2] = sharpened
+            if portrait is None:
+                seed = self._performer_seed(performer) + (box_index * 101) + (frame_index // 7)
+                patch, mask, blend_strength = self._build_fictitious_face_patch(performer, patch_width, patch_height, seed)
+                roi = output[y:y2, x:x2]
+                alpha = (mask.astype(np.float32) / 255.0) * blend_strength
+                alpha_3 = np.repeat(alpha[:, :, None], 3, axis=2)
+                blended = (roi.astype(np.float32) * (1.0 - alpha_3)) + (patch.astype(np.float32) * alpha_3)
+                output[y:y2, x:x2] = np.clip(blended, 0, 255).astype(np.uint8)
+                continue
+
+            output = self._overlay_reference_identity(
+                frame=output,
+                target_face_box=(x, y, w, h),
+                portrait=portrait,
+            )
         return output
+
+    def _overlay_reference_identity(
+        self,
+        frame: np.ndarray,
+        target_face_box: tuple[int, int, int, int],
+        portrait: dict[str, Any],
+    ) -> np.ndarray:
+        output = frame
+        x, y, w, h = target_face_box
+        frame_h, frame_w = output.shape[:2]
+        x = int(self._clamp(x, 0, frame_w - 2))
+        y = int(self._clamp(y, 0, frame_h - 2))
+        w = int(self._clamp(w, 8, frame_w - x))
+        h = int(self._clamp(h, 8, frame_h - y))
+
+        portrait_image = portrait.get("image")
+        portrait_face_box = portrait.get("face_box")
+        if not isinstance(portrait_image, np.ndarray) or portrait_image.size == 0:
+            return output
+        if not isinstance(portrait_face_box, tuple) or len(portrait_face_box) != 4:
+            return output
+
+        px, py, pw, ph = portrait_face_box
+        portrait_h, portrait_w = portrait_image.shape[:2]
+        px = int(self._clamp(px, 0, portrait_w - 2))
+        py = int(self._clamp(py, 0, portrait_h - 2))
+        pw = int(self._clamp(pw, 8, portrait_w - px))
+        ph = int(self._clamp(ph, 8, portrait_h - py))
+
+        head_src_left = max(int(px - (pw * 0.24)), 0)
+        head_src_top = max(int(py - (ph * 0.30)), 0)
+        head_src_right = min(int(px + (pw * 1.24)), portrait_w)
+        head_src_bottom = min(int(py + (ph * 1.10)), portrait_h)
+        if head_src_right - head_src_left < 8 or head_src_bottom - head_src_top < 8:
+            return output
+
+        head_src = portrait_image[head_src_top:head_src_bottom, head_src_left:head_src_right]
+        head_dst_left = x
+        head_dst_top = y
+        head_dst_right = min(x + w, frame_w)
+        head_dst_bottom = min(y + h, frame_h)
+        if head_dst_right - head_dst_left < 8 or head_dst_bottom - head_dst_top < 8:
+            return output
+
+        head_dst_roi = output[head_dst_top:head_dst_bottom, head_dst_left:head_dst_right]
+        head_resized = cv2.resize(head_src, (head_dst_roi.shape[1], head_dst_roi.shape[0]), interpolation=cv2.INTER_CUBIC)
+        head_matched = self._fit_color(head_resized, head_dst_roi)
+        head_mask = self._soft_ellipse_mask(head_dst_roi.shape[1], head_dst_roi.shape[0], feather_ratio=0.16)
+        head_alpha = np.repeat((head_mask[:, :, None] / 255.0) * 0.90, 3, axis=2)
+        head_blended = (head_dst_roi.astype(np.float32) * (1.0 - head_alpha)) + (head_matched.astype(np.float32) * head_alpha)
+        output[head_dst_top:head_dst_bottom, head_dst_left:head_dst_right] = np.clip(head_blended, 0, 255).astype(np.uint8)
+
+        torso_src_top = min(int(py + (ph * 0.54)), portrait_h - 2)
+        torso_src_left = max(int(px - (pw * 0.28)), 0)
+        torso_src_right = min(int(px + (pw * 1.28)), portrait_w)
+        torso_src_bottom = portrait_h
+        if torso_src_right - torso_src_left < 12 or torso_src_bottom - torso_src_top < 12:
+            return output
+        torso_src = portrait_image[torso_src_top:torso_src_bottom, torso_src_left:torso_src_right]
+
+        torso_dst_left = max(int(x - (w * 0.22)), 0)
+        torso_dst_top = min(int(y + (h * 0.52)), frame_h - 2)
+        torso_dst_width = int(w * 1.44)
+        torso_dst_height = int(h * 1.55)
+        torso_dst_right = min(torso_dst_left + torso_dst_width, frame_w)
+        torso_dst_bottom = min(torso_dst_top + torso_dst_height, frame_h)
+        if torso_dst_right - torso_dst_left < 12 or torso_dst_bottom - torso_dst_top < 12:
+            return output
+
+        torso_dst_roi = output[torso_dst_top:torso_dst_bottom, torso_dst_left:torso_dst_right]
+        torso_resized = cv2.resize(torso_src, (torso_dst_roi.shape[1], torso_dst_roi.shape[0]), interpolation=cv2.INTER_CUBIC)
+        torso_matched = self._fit_color(torso_resized, torso_dst_roi)
+
+        torso_mask = np.zeros((torso_dst_roi.shape[0], torso_dst_roi.shape[1]), dtype=np.float32)
+        for row in range(torso_mask.shape[0]):
+            vertical = row / max(torso_mask.shape[0] - 1, 1)
+            torso_mask[row, :] = self._clamp((vertical * 1.15), 0.0, 1.0)
+        torso_mask = cv2.GaussianBlur(torso_mask, (0, 0), max(1.8, min(torso_dst_roi.shape[0], torso_dst_roi.shape[1]) * 0.08))
+        torso_alpha = np.repeat((torso_mask[:, :, None]) * 0.46, 3, axis=2)
+        torso_blended = (torso_dst_roi.astype(np.float32) * (1.0 - torso_alpha)) + (torso_matched.astype(np.float32) * torso_alpha)
+        output[torso_dst_top:torso_dst_bottom, torso_dst_left:torso_dst_right] = np.clip(torso_blended, 0, 255).astype(np.uint8)
+        return output
+
+    def _fit_color(self, source: np.ndarray, target: np.ndarray) -> np.ndarray:
+        if source.size == 0 or target.size == 0:
+            return source
+        src = source.astype(np.float32)
+        dst = target.astype(np.float32)
+        src_mean, src_std = cv2.meanStdDev(src)
+        dst_mean, dst_std = cv2.meanStdDev(dst)
+        src_std = np.maximum(src_std, 1e-4)
+        adjusted = ((src - src_mean.reshape(1, 1, 3)) * (dst_std.reshape(1, 1, 3) / src_std.reshape(1, 1, 3))) + dst_mean.reshape(1, 1, 3)
+        adjusted = cv2.GaussianBlur(adjusted, (0, 0), 0.6)
+        return np.clip(adjusted, 0, 255).astype(np.uint8)
+
+    def _soft_ellipse_mask(self, width: int, height: int, feather_ratio: float) -> np.ndarray:
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.ellipse(
+            mask,
+            (width // 2, height // 2),
+            (max(4, int(width * 0.45)), max(4, int(height * 0.48))),
+            0,
+            0,
+            360,
+            255,
+            -1,
+        )
+        sigma = max(1.2, min(width, height) * feather_ratio)
+        return cv2.GaussianBlur(mask, (0, 0), sigma)
 
     def _build_fictitious_face_patch(
         self,
@@ -1380,6 +1879,7 @@ class LocalQuickRemixService:
         detail: str,
         progress: float,
         callback: Callable[[dict[str, Any]], None] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         step = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1387,6 +1887,8 @@ class LocalQuickRemixService:
             "detail": detail,
             "progress": round(self._clamp(progress, 0.0, 1.0), 4),
         }
+        if extra:
+            step.update(extra)
         processing_steps.append(step)
         if callback is not None:
             callback(step)

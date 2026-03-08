@@ -43,7 +43,12 @@ function mapBackendStageToStepIndex(stage: string | null | undefined, stepCount:
   if (normalized.includes("cast synthesis") || normalized.includes("segment planning")) {
     return Math.min(stepCount - 1, 3);
   }
-  if (normalized.includes("render segments") || normalized.includes("render voice") || normalized.includes("face synthesis")) {
+  if (
+    normalized.includes("render segments") ||
+    normalized.includes("render voice") ||
+    normalized.includes("face synthesis") ||
+    normalized.includes("reference portraits")
+  ) {
     return Math.min(stepCount - 1, 4);
   }
   if (normalized.includes("compose output") || normalized.includes("finalize") || normalized.includes("mux")) {
@@ -58,6 +63,16 @@ function mapBackendStageToStepIndex(stage: string | null | undefined, stepCount:
   return 0;
 }
 
+function formatElapsed(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds)) {
+    return "--";
+  }
+  const rounded = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(rounded / 60);
+  const secs = rounded % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
 export default function QuickConvertPage() {
   const [form, setForm] = useState<QuickProjectCreateInput>(initialState);
   const [submitting, setSubmitting] = useState(false);
@@ -67,9 +82,15 @@ export default function QuickConvertPage() {
   const [backendProgressRatio, setBackendProgressRatio] = useState(0);
   const [backendStage, setBackendStage] = useState<string | null>(null);
   const [backendExecution, setBackendExecution] = useState<string | null>(null);
+  const [backendElapsedSeconds, setBackendElapsedSeconds] = useState<number | null>(null);
+  const [backendActiveWorkers, setBackendActiveWorkers] = useState(0);
+  const [conversionStartedAtMs, setConversionStartedAtMs] = useState<number | null>(null);
+  const [elapsedTicker, setElapsedTicker] = useState(0);
   const [autoScrollFeed, setAutoScrollFeed] = useState(true);
+  const [autoScrollSteps, setAutoScrollSteps] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const activityFeedContainerRef = useRef<HTMLDivElement | null>(null);
+  const conversionStepsContainerRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
 
   const ready = useMemo(
@@ -108,6 +129,14 @@ export default function QuickConvertPage() {
       setBackendExecution(progressPayload.execution);
       setBackendProgressRatio(progressPayload.progress ?? 0);
       setBackendStage(progressPayload.current_stage ?? null);
+      setBackendElapsedSeconds(typeof progressPayload.elapsed_seconds === "number" ? progressPayload.elapsed_seconds : null);
+      setBackendActiveWorkers(progressPayload.active_worker_threads ?? 0);
+      if (progressPayload.started_at) {
+        const startedMs = Date.parse(progressPayload.started_at);
+        if (!Number.isNaN(startedMs)) {
+          setConversionStartedAtMs((current) => current ?? startedMs);
+        }
+      }
       setActiveConversionStep(
         mapBackendStageToStepIndex(progressPayload.current_stage, conversionSteps.length)
       );
@@ -148,6 +177,16 @@ export default function QuickConvertPage() {
     };
   }, [submitting, conversionProjectId, conversionSteps.length, navigate]);
 
+  useEffect(() => {
+    if (!submitting || conversionStartedAtMs == null || backendElapsedSeconds != null) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setElapsedTicker((current) => current + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [submitting, conversionStartedAtMs, backendElapsedSeconds]);
+
   const scrollActivityToBottom = () => {
     const container = activityFeedContainerRef.current;
     if (!container) {
@@ -166,6 +205,30 @@ export default function QuickConvertPage() {
     return () => window.cancelAnimationFrame(handle);
   }, [activityFeed, autoScrollFeed]);
 
+  const scrollStepsToActive = () => {
+    const container = conversionStepsContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const active = container.querySelector<HTMLElement>(`[data-step-index="${activeConversionStep}"]`);
+    if (!active) {
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+    const centeredTop = active.offsetTop - (container.clientHeight / 2) + (active.clientHeight / 2);
+    container.scrollTop = Math.max(0, centeredTop);
+  };
+
+  useEffect(() => {
+    if (!autoScrollSteps) {
+      return;
+    }
+    const handle = window.requestAnimationFrame(() => {
+      scrollStepsToActive();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [activeConversionStep, conversionSteps.length, autoScrollSteps]);
+
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setActiveConversionStep(0);
@@ -174,7 +237,12 @@ export default function QuickConvertPage() {
     setBackendProgressRatio(0);
     setBackendStage(null);
     setBackendExecution(null);
+    setBackendElapsedSeconds(null);
+    setBackendActiveWorkers(0);
+    setConversionStartedAtMs(Date.now());
+    setElapsedTicker(0);
     setAutoScrollFeed(true);
+    setAutoScrollSteps(true);
     setSubmitting(true);
     setError(null);
     try {
@@ -194,12 +262,19 @@ export default function QuickConvertPage() {
       setBackendExecution("queued");
       setBackendStage("Queued");
       setBackendProgressRatio(0.01);
+      setBackendActiveWorkers(0);
       setActivityFeed(["Queued: Quick conversion request accepted. Waiting for backend worker updates."]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Quick conversion failed");
       setSubmitting(false);
     }
   };
+
+  const elapsedSeconds =
+    backendElapsedSeconds ??
+    (submitting && conversionStartedAtMs != null
+      ? Math.max((Date.now() - conversionStartedAtMs + (elapsedTicker * 0)) / 1000, 0)
+      : null);
 
   return (
     <div className="space-y-6">
@@ -413,7 +488,7 @@ export default function QuickConvertPage() {
                 <p className="mt-1 text-xs text-brand-700">
                   Live backend progress from the conversion worker.
                 </p>
-                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-800 md:grid-cols-3">
+                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-800 md:grid-cols-5">
                   <p>
                     <span className="font-semibold">Project:</span>{" "}
                     {conversionProjectId ? `#${conversionProjectId}` : "starting..."}
@@ -425,6 +500,12 @@ export default function QuickConvertPage() {
                     <span className="font-semibold">Progress:</span>{" "}
                     {(backendProgressRatio * 100).toFixed(1)}% ({backendExecution ?? "queued"})
                   </p>
+                  <p>
+                    <span className="font-semibold">Workers:</span> {backendActiveWorkers}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Elapsed:</span> {formatElapsed(elapsedSeconds)}
+                  </p>
                 </div>
                 <div className="mt-2">
                   <div className="h-2 w-full overflow-hidden rounded bg-brand-100">
@@ -434,28 +515,64 @@ export default function QuickConvertPage() {
                     />
                   </div>
                 </div>
-                <ol className="mt-3 space-y-2 text-xs">
-                  {conversionSteps.map((step, index) => {
-                    const isDone = index < activeConversionStep;
-                    const isActive = index === activeConversionStep;
-                    return (
-                      <li key={step} className="flex items-start gap-2">
-                        <span
-                          className={`mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
-                            isDone
-                              ? "bg-emerald-100 text-emerald-700"
-                              : isActive
-                                ? "bg-brand-200 text-brand-800"
-                                : "bg-slate-200 text-slate-600"
-                          }`}
-                        >
-                          {isDone ? "OK" : isActive ? "..." : `${index + 1}`}
-                        </span>
-                        <span className={isActive ? "font-semibold text-brand-900" : "text-slate-700"}>{step}</span>
-                      </li>
-                    );
-                  })}
-                </ol>
+                <div className="mt-4 rounded-md border border-brand-100 bg-white/80 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-brand-800">Conversion Steps</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAutoScrollSteps((current) => {
+                            const next = !current;
+                            if (next) {
+                              window.requestAnimationFrame(() => {
+                                scrollStepsToActive();
+                              });
+                            }
+                            return next;
+                          });
+                        }}
+                        className="rounded border border-brand-200 bg-white px-2 py-1 text-[10px] font-semibold text-brand-700 hover:bg-brand-50"
+                      >
+                        {autoScrollSteps ? "Pause Auto-Scroll" : "Resume Auto-Scroll"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          scrollStepsToActive();
+                          setAutoScrollSteps(true);
+                        }}
+                        className="rounded border border-brand-200 bg-white px-2 py-1 text-[10px] font-semibold text-brand-700 hover:bg-brand-50"
+                      >
+                        Jump to Latest
+                      </button>
+                    </div>
+                  </div>
+                  <div ref={conversionStepsContainerRef} className="mt-2 max-h-48 overflow-y-auto pr-1">
+                    <ol className="space-y-2 text-xs">
+                      {conversionSteps.map((step, index) => {
+                        const isDone = index < activeConversionStep;
+                        const isActive = index === activeConversionStep;
+                        return (
+                          <li key={step} data-step-index={index} className="flex items-start gap-2">
+                            <span
+                              className={`mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                                isDone
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : isActive
+                                    ? "bg-brand-200 text-brand-800"
+                                    : "bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              {isDone ? "OK" : isActive ? "..." : `${index + 1}`}
+                            </span>
+                            <span className={isActive ? "font-semibold text-brand-900" : "text-slate-700"}>{step}</span>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                </div>
 
                 <div className="mt-4 rounded-md border border-brand-100 bg-white/80 p-3">
                   <div className="flex items-center justify-between gap-2">

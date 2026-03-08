@@ -159,6 +159,9 @@ export interface QuickConversionProgress {
   progress: number;
   current_stage?: string | null;
   processing_steps: QuickProcessingStep[];
+  started_at?: string | null;
+  elapsed_seconds?: number | null;
+  active_worker_threads?: number;
   output_video_path?: string | null;
   download_url?: string | null;
   execution_error?: string | null;
