@@ -25,20 +25,7 @@ export default function DashboardPage() {
         title="Dashboard"
         subtitle="Manage remix planning projects and inspect generated storyboard assets."
       >
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-slate-600">Projects are generated from three YouTube references.</p>
-          <div className="flex items-center gap-2">
-            <Link to={ROUTES.quickConvert} className="rounded-md border border-brand-300 px-3 py-2 text-sm font-semibold text-brand-700">
-              Quick Convert
-            </Link>
-            <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
-              Downloads
-            </Link>
-            <Link to={ROUTES.createProject} className="rounded-md bg-brand-500 px-3 py-2 text-sm font-semibold text-white">
-              New Project
-            </Link>
-          </div>
-        </div>
+        <p className="text-sm text-slate-600">Projects are generated from three YouTube references.</p>
       </PageCard>
 
       <PageCard title="All Projects">

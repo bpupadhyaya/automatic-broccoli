@@ -1,4 +1,4 @@
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 
 import DashboardPage from "./pages/DashboardPage";
 import CreateProjectPage from "./pages/CreateProjectPage";
@@ -8,6 +8,9 @@ import DownloadsPage from "./pages/DownloadsPage";
 import { ROUTES } from "./routes";
 
 export default function App() {
+  const location = useLocation();
+  const isDashboardRoute = location.pathname === ROUTES.dashboard;
+
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="border-b border-slate-200 bg-white">
@@ -16,21 +19,26 @@ export default function App() {
             AI YouTube Remix Generator
           </Link>
           <div className="flex items-center gap-3 text-sm font-medium">
-            <Link to="/" className="rounded-md px-3 py-2 text-slate-700 hover:bg-slate-100">
-              Dashboard
-            </Link>
-            <Link
-              to={ROUTES.quickConvert}
-              className="rounded-md border border-brand-300 px-3 py-2 text-brand-700 hover:bg-brand-50"
-            >
-              Quick Convert
-            </Link>
-            <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-100">
-              Downloads
-            </Link>
-            <Link to={ROUTES.createProject} className="rounded-md bg-brand-500 px-3 py-2 text-white hover:bg-brand-700">
-              Create Project
-            </Link>
+            {isDashboardRoute ? (
+              <>
+                <Link
+                  to={ROUTES.quickConvert}
+                  className="rounded-md border border-brand-300 px-3 py-2 text-brand-700 hover:bg-brand-50"
+                >
+                  Quick Convert
+                </Link>
+                <Link to={ROUTES.downloads} className="rounded-md border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-100">
+                  Downloads
+                </Link>
+                <Link to={ROUTES.createProject} className="rounded-md bg-brand-500 px-3 py-2 text-white hover:bg-brand-700">
+                  Create Project
+                </Link>
+              </>
+            ) : (
+              <Link to={ROUTES.dashboard} className="rounded-md border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-100">
+                Dashboard
+              </Link>
+            )}
           </div>
         </nav>
       </header>
