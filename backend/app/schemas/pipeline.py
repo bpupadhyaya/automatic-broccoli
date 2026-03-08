@@ -127,3 +127,8 @@ class ExportResponse(ORMBaseModel):
     manifest_version: str
     timeline: dict
     exports: list[ExportVariant]
+
+
+class ManualShotOverrideRequest(BaseModel):
+    decision: Literal["approved", "rejected_qc"]
+    note: Optional[str] = None

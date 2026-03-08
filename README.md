@@ -140,6 +140,7 @@ DATABASE_URL=postgresql://user:password@localhost:5432/remixdb
 - `POST /api/projects/{project_id}/render`
 - `GET /api/render-jobs/{job_id}`
 - `POST /api/projects/{project_id}/qc`
+- `POST /api/projects/{project_id}/shots/{shot_id}/manual-override`
 - `POST /api/projects/{project_id}/export`
 - `GET /api/projects/{project_id}/manifest`
 
@@ -182,11 +183,21 @@ New backend modules include:
 - `app/services/shot_builder.py`
 - `app/services/prompt_builder.py`
 - `app/services/render_queue.py`
-- `app/services/provider_runway.py`
-- `app/services/provider_veo.py`
-- `app/services/provider_luma.py`
+- `app/services/providers/base.py`
+- `app/services/providers/runway.py`
+- `app/services/providers/veo.py`
+- `app/services/providers/luma.py`
 - `app/services/qc_scoring.py`
 - `app/services/rerender_policy.py`
 - `app/services/beat_sync.py`
 - `app/services/timeline_editor.py`
 - `app/services/exporter.py`
+
+Reliability guarantees in this MVP:
+
+- shot-level failures do not block full project completion
+- provider fallback is enabled in render queue handling
+- weak shots can rerender independently
+- manual approval/rejection overrides are available
+- all QC runs are persisted (`qc_results` + `render_jobs.qc_result_json`)
+- manifests are versioned on export

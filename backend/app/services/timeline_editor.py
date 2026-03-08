@@ -4,7 +4,14 @@ from app.models.pipeline import Shot
 from app.services.beat_sync import align_to_nearest_beat
 
 
-def build_timeline(approved_shots: list[Shot], beat_map: list[dict]) -> dict:
+class TimelineEditorService:
+    """Assemble approved clips into beat-aligned timeline segments."""
+
+    def build_timeline(self, project_id: str) -> dict:
+        return {"project_id": project_id, "segments": [], "duration_sec": 0.0, "rules_applied": []}
+
+
+def _build_timeline_from_shots(project_id: str, approved_shots: list[Shot], beat_map: list[dict]) -> dict:
     ordered = sorted(approved_shots, key=lambda shot: (shot.start_time, shot.priority_score * -1))
     segments = []
     wide_medium_close_cycle = ["wide", "medium", "close-up"]
@@ -34,6 +41,7 @@ def build_timeline(approved_shots: list[Shot], beat_map: list[dict]) -> dict:
     duration = round(max((segment["timeline_end"] for segment in segments), default=0.0), 2)
 
     return {
+        "project_id": project_id,
         "segments": segments,
         "duration_sec": duration,
         "rules_applied": [
@@ -42,3 +50,8 @@ def build_timeline(approved_shots: list[Shot], beat_map: list[dict]) -> dict:
             "inserted hero-friendly transition markers at section peaks",
         ],
     }
+
+
+def build_timeline(approved_shots: list[Shot], beat_map: list[dict]) -> dict:
+    project_id = str(approved_shots[0].project_id) if approved_shots else "unknown"
+    return _build_timeline_from_shots(project_id, approved_shots, beat_map)

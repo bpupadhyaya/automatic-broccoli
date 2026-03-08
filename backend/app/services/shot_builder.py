@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from typing import List
 
 from app.models.project import Project
+from app.schemas.project import RemixProjectRead
+from app.schemas.shot import ShotCreate
 from app.services.prompt_builder import build_shot_prompt
 
 SHOT_TYPES = [
@@ -28,7 +31,7 @@ def _stable_index(seed: str, modulo: int) -> int:
     return int(sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % modulo
 
 
-def build_shots(project: Project, scene_data: dict, character_pack: dict) -> list[dict]:
+def _build_shot_dicts(project: Project, scene_data: dict, character_pack: dict) -> list[dict]:
     shots = []
     lead_name = character_pack["name"]
     references = character_pack["reference_asset_urls"]
@@ -72,3 +75,40 @@ def build_shots(project: Project, scene_data: dict, character_pack: dict) -> lis
             current = end
 
     return shots
+
+
+class ShotBuilderService:
+    """Generate a shot plan scaffold from project metadata."""
+
+    def build_shots(self, project: RemixProjectRead) -> List[ShotCreate]:
+        start = 0.0
+        shots: list[ShotCreate] = []
+        scenes = project.storyboard_scenes or []
+        for index, scene in enumerate(scenes, start=1):
+            section = f"scene_{index}"
+            duration = 6
+            end = round(start + duration, 2)
+            shots.append(
+                ShotCreate(
+                    project_id=project.id,
+                    shot_code=f"{section}_{index:02d}",
+                    section=section,
+                    start_time=start,
+                    end_time=end,
+                    duration_sec=duration,
+                    shot_type="hero reveal",
+                    camera_move="slow dolly in",
+                    location=(scene.setting if hasattr(scene, "setting") else "performance set"),
+                    cast=[project.character_bible.cast_name] if project.character_bible else [f"Lead Performer {project.id}"],
+                    wardrobe=project.costume_style,
+                    lighting=project.lighting_style,
+                    prompt=f"fictional performance shot for {section}",
+                    references=[],
+                )
+            )
+            start = end
+        return shots
+
+
+def build_shots(project: Project, scene_data: dict, character_pack: dict) -> list[dict]:
+    return _build_shot_dicts(project, scene_data, character_pack)

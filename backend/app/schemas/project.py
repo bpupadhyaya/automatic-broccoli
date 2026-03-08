@@ -60,6 +60,13 @@ class CharacterBible(ORMBaseModel):
     movement_notes: list[str]
 
 
+class CharacterProfile(ORMBaseModel):
+    name: str
+    role: str
+    identity: dict
+    references: list[str]
+
+
 class Scene(ORMBaseModel):
     scene_number: int
     title: str
@@ -114,6 +121,10 @@ class ProjectDetail(ProjectSummary):
     consistency_rules: Optional[list[str]]
     manifest: Optional[dict]
     updated_at: datetime
+
+
+class RemixProjectRead(ProjectDetail):
+    pass
 
 
 class ManifestResponse(ORMBaseModel):
